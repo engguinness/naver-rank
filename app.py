@@ -54,6 +54,7 @@ def get_ranking(keyword, target_name):
     chrome_options.add_argument("--disable-dev-shm-usage")  # ✨ 메모리 부족 방지
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920x1080")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
     
     # 🚀 서버에 설치된 구글 크롬 경로를 자동으로 찾는 설정
     if os.path.exists("/usr/bin/google-chrome"):
@@ -66,7 +67,7 @@ def get_ranking(keyword, target_name):
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
         driver.get(f"https://map.naver.com/v5/search/{keyword}")
-        time.sleep(7)
+        time.sleep(12)
         try: driver.switch_to.frame("searchIframe")
         except: return {"status": "error"}
         
