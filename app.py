@@ -50,17 +50,30 @@ def save_to_history(user_id, keyword, target_name, total_rank, pure_rank):
 def get_ranking(keyword, target_name):
     chrome_options = Options()
     chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")  # ✨ 서버 필수 설정
+    chrome_options.add_argument("--disable-dev-shm-usage")  # ✨ 메모리 부족 방지
+    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920x1080")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    
+    # 🚀 서버에 설치된 구글 크롬 경로를 자동으로 찾는 설정
+    if os.path.exists("/usr/bin/google-chrome"):
+        chrome_options.binary_location = "/usr/bin/google-chrome"
+    elif os.path.exists("/usr/bin/chromium-browser"):
+        chrome_options.binary_location = "/usr/bin/chromium-browser"
+
     try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
         driver.get(f"https://map.naver.com/v5/search/{keyword}")
         time.sleep(7)
         try: driver.switch_to.frame("searchIframe")
         except: return {"status": "error"}
+        
         scroll_box = driver.find_element(By.CSS_SELECTOR, "#_pcmap_list_scroll_container")
         found = False
         result_data = {"status": "not_found"}
+        
         for i in range(15):
             all_items = driver.find_elements(By.CSS_SELECTOR, "li")
             total_rank = 0
@@ -77,10 +90,14 @@ def get_ranking(keyword, target_name):
                     break
             if found: break
             scroll_box.send_keys(Keys.PAGE_DOWN)
-            time.sleep(1)
+            time.sleep(1.5)
         return result_data
-    except: return {"status": "error"}
-    finally: driver.quit()
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"status": "error"}
+    finally:
+        try: driver.quit()
+        except: pass
 
 @app.route('/')
 def home():
@@ -108,5 +125,6 @@ def get_user_history():
     return jsonify({})
 
 if __name__ == '__main__':
-    # 💥 이 줄이 외부 접속을 허용하는 핵심 줄입니다!
-    app.run(debug=True, port=8080, host='0.0.0.0')
+    # 🚀 Render 서버 환경에 맞춰서 포트 번호를 자동으로 잡게 수정했습니다.
+    port = int(os.environ.get("PORT", 8080))
+    app.run(debug=True, port=port, host='0.0.0.0')
