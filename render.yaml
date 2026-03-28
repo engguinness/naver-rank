@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: naver-rank-checker
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      # 크롬 설치를 위한 특수 명령어
+      apt-get update && apt-get install -y chromium-driver chromium
+    startCommand: python app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+        

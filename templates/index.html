@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>네이버 플레이스 순위 추적기 (VIP)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Pretendard', -apple-system, sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; margin: 0; padding: 40px 20px; }
+        .container { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 100%; max-width: 600px; text-align: center; }
+        h2 { color: #333; margin-bottom: 24px; }
+        .input-group { margin-bottom: 16px; text-align: left; }
+        label { display: block; margin-bottom: 6px; font-weight: bold; font-size: 14px; color: #555; }
+        input { width: 100%; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; outline: none; transition: 0.3s; box-sizing: border-box;}
+        input:focus { border-color: #03c75a; box-shadow: 0 0 0 3px rgba(3,199,90,0.1); }
+        button.action-btn { width: 100%; padding: 14px; background-color: #03c75a; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.3s; margin-top: 10px; }
+        button.action-btn:hover { background-color: #02b351; }
+        button.action-btn:disabled { background-color: #ccc; cursor: not-allowed; }
+        
+        .tab-menu { display: flex; gap: 10px; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .tab-btn { flex: 1; background: #f8f9fa; color: #888; border: none; font-size: 15px; font-weight: bold; cursor: pointer; padding: 12px; border-radius: 8px; transition: 0.2s; }
+        .tab-btn:hover { background: #e9ecef; }
+        .tab-btn.active { background: #03c75a; color: white; }
+
+        #appScreen, #result, #searchView, #historyView { display: none; }
+        .rank-box { font-size: 18px; margin: 8px 0; color: #555; background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: left;}
+        .highlight { color: #03c75a; font-size: 24px; font-weight: bold; }
+        .loader { display: none; margin: 20px auto; border: 4px solid #f3f3f3; border-top: 4px solid #03c75a; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .logout-btn { background: #ff4d4f; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+        .logout-btn:hover { background: #d9363e; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 14px; text-align: center; }
+        th, td { padding: 12px 10px; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; color: #333; font-weight: bold; }
+        .kw-badge { background: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 13px; display: inline-block;}
+        canvas { max-height: 300px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="loginScreen">
+        <h2>🔒 VIP 전용 대시보드</h2>
+        <p style="color:#666; margin-bottom: 30px;">초대받은 분들만 이용할 수 있는 프라이빗 시스템입니다.</p>
+        
+        <div class="input-group">
+            <label>사용자 이름 (ID)</label>
+            <input type="text" id="userId" placeholder="본인 이름을 입력하세요">
+        </div>
+        
+        <div class="input-group" style="margin-bottom: 24px;">
+            <label>비밀 입장 코드</label>
+            <input type="password" id="accessCode" placeholder="비밀 코드를 입력하세요">
+        </div>
+
+        <button class="action-btn" onclick="login()">인증하고 입장하기</button>
+    </div>
+
+    <div id="appScreen">
+        <div class="header-bar">
+            <h3 style="margin: 0;">📍 <span id="displayUser" style="color:#03c75a;"></span>님의 공간</h3>
+            <button class="logout-btn" onclick="logout()">로그아웃</button>
+        </div>
+
+        <div class="tab-menu">
+            <button class="tab-btn active" id="btnSearch" onclick="switchTab('search')">🔍 검색하기</button>
+            <button class="tab-btn" id="btnHistory" onclick="switchTab('history')">📊 이전 기록 확인</button>
+        </div>
+
+        <div id="searchView" style="display: block;">
+            <div class="input-group">
+                <label>검색할 키워드</label>
+                <input type="text" id="keyword" placeholder="예: 김해영어회화">
+            </div>
+            <div class="input-group">
+                <label>내 업체명</label>
+                <input type="text" id="targetName" placeholder="예: 저스트잉글리시">
+            </div>
+            
+            <button class="action-btn" id="searchBtn" onclick="searchRank()">순위 확인 및 저장</button>
+            <div class="loader" id="loader"></div>
+            
+            <div id="result">
+                <div class="rank-box">
+                    <div style="font-size: 15px;">📢 검색 업체: <b id="resName" style="color:#333;"></b></div>
+                    <div style="margin-top: 15px; border-top: 1px dashed #ddd; padding-top: 15px;">
+                        🚀 순수 순위: <span class="highlight" id="resPure"></span>위 <br>
+                        <span style="font-size: 14px; color: #888;">(광고포함 전체 순위: <b id="resTotal"></b>위)</span>
+                    </div>
+                </div>
+                <p id="successMsg" style="color: #03c75a; font-weight: bold; display: none; margin-top: 15px;">✅ 저장이 완료되었습니다. 기록 탭을 확인하세요!</p>
+            </div>
+        </div>
+
+        <div id="historyView">
+            <div id="chartContainer" style="display: none;">
+                <canvas id="rankChart"></canvas>
+            </div>
+
+            <div id="tableContainer" style="display: none;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>검색어</th>
+                            <th>날짜</th>
+                            <th>순위</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyBody">
+                    </tbody>
+                </table>
+            </div>
+            
+            <div id="noDataMsg" style="padding: 40px 0; color: #888; display: none;">
+                아직 저장된 검색 기록이 없습니다.<br>'검색하기' 메뉴에서 먼저 순위를 측정해 보세요!
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentUser = "";
+    let myChart = null;
+
+    // 💥 마스터 비밀번호 설정 (여기서 원하시는 비밀번호로 변경하세요!)
+    const MASTER_PASSWORD = "just"; 
+
+    function login() {
+        const userId = document.getElementById('userId').value.trim();
+        const accessCode = document.getElementById('accessCode').value.trim();
+        
+        if(!userId) { alert("사용자 이름을 입력해주세요!"); return; }
+        
+        // 💥 비밀번호 검사 로직
+        if(accessCode !== MASTER_PASSWORD) {
+            alert("비밀 코드가 일치하지 않습니다. 관리자에게 문의하세요.");
+            return;
+        }
+        
+        currentUser = userId;
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('appScreen').style.display = 'block';
+        document.getElementById('displayUser').innerText = currentUser;
+        
+        const savedKeyword = localStorage.getItem(`kw_${currentUser}`);
+        const savedTarget = localStorage.getItem(`tn_${currentUser}`);
+        if (savedKeyword) document.getElementById('keyword').value = savedKeyword;
+        else document.getElementById('keyword').value = "";
+        if (savedTarget) document.getElementById('targetName').value = savedTarget;
+        else document.getElementById('targetName').value = ""; 
+
+        switchTab('search'); 
+    }
+
+    function logout() {
+        currentUser = "";
+        document.getElementById('userId').value = "";
+        document.getElementById('accessCode').value = ""; // 로그아웃 시 비밀번호 창 비우기
+        document.getElementById('appScreen').style.display = 'none';
+        document.getElementById('loginScreen').style.display = 'block';
+        document.getElementById('result').style.display = 'none';
+        document.getElementById('successMsg').style.display = 'none';
+        if(myChart) myChart.destroy();
+    }
+
+    function switchTab(tabName) {
+        if(tabName === 'search') {
+            document.getElementById('searchView').style.display = 'block';
+            document.getElementById('historyView').style.display = 'none';
+            document.getElementById('btnSearch').classList.add('active');
+            document.getElementById('btnHistory').classList.remove('active');
+        } else if(tabName === 'history') {
+            document.getElementById('searchView').style.display = 'none';
+            document.getElementById('historyView').style.display = 'block';
+            document.getElementById('btnSearch').classList.remove('active');
+            document.getElementById('btnHistory').classList.add('active');
+            loadHistory(); 
+        }
+    }
+
+    async function searchRank() {
+        const keyword = document.getElementById('keyword').value;
+        const targetName = document.getElementById('targetName').value;
+        
+        if(!keyword || !targetName) { alert('모두 입력해주세요!'); return; }
+
+        document.getElementById('loader').style.display = 'block';
+        document.getElementById('result').style.display = 'none';
+        document.getElementById('successMsg').style.display = 'none'; 
+        document.getElementById('searchBtn').disabled = true;
+        document.getElementById('searchBtn').innerText = "순위 찾는 중...";
+
+        try {
+            const response = await fetch('/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: currentUser, keyword, target_name: targetName })
+            });
+            const data = await response.json();
+
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('searchBtn').disabled = false;
+            document.getElementById('searchBtn').innerText = "순위 확인 및 저장";
+
+            if(data.status === 'success') {
+                document.getElementById('resName').innerText = data.name;
+                document.getElementById('resPure').innerText = data.pure_rank;
+                document.getElementById('resTotal').innerText = data.total_rank;
+                document.getElementById('result').style.display = 'block';
+                document.getElementById('successMsg').style.display = 'block'; 
+
+                localStorage.setItem(`kw_${currentUser}`, keyword);
+                localStorage.setItem(`tn_${currentUser}`, targetName);
+
+            } else {
+                alert(`찾지 못했습니다. 키워드나 업체명을 다시 확인해 주세요.`);
+            }
+        } catch(e) {
+            alert('서버 오류가 발생했습니다.');
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('searchBtn').disabled = false;
+            document.getElementById('searchBtn').innerText = "순위 확인 및 저장";
+        }
+    }
+
+    async function loadHistory() {
+        const response = await fetch('/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: currentUser })
+        });
+        const historyData = await response.json();
+
+        if (Object.keys(historyData).length === 0) {
+            document.getElementById('chartContainer').style.display = 'none';
+            document.getElementById('tableContainer').style.display = 'none';
+            document.getElementById('noDataMsg').style.display = 'block';
+            return;
+        }
+
+        document.getElementById('noDataMsg').style.display = 'none';
+        document.getElementById('chartContainer').style.display = 'block';
+        document.getElementById('tableContainer').style.display = 'block';
+
+        let allDates = new Set();
+        for (const key in historyData) {
+            Object.keys(historyData[key]).forEach(date => allDates.add(date));
+        }
+        const sortedDates = Array.from(allDates).sort(); 
+
+        const datasets = [];
+        const colors = ['#03c75a', '#ff6b6b', '#4dabf7', '#fcc419', '#845ef7'];
+        let colorIdx = 0;
+
+        const tbody = document.getElementById('historyBody');
+        tbody.innerHTML = ''; 
+
+        for (const key in historyData) {
+            const keywordName = key.split('_')[0]; 
+            
+            const datesForKey = Object.keys(historyData[key]).sort().reverse();
+            datesForKey.forEach(date => {
+                const info = historyData[key][date];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><span class="kw-badge">${keywordName}</span></td>
+                    <td style="font-size: 13px; color: #555;">${date}</td>
+                    <td><b style="color:#03c75a; font-size: 16px;">${info.pure_rank}위</b></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            const rankData = sortedDates.map(date => {
+                return historyData[key][date] ? historyData[key][date].pure_rank : null; 
+            });
+
+            datasets.push({
+                label: keywordName,
+                data: rankData,
+                borderColor: colors[colorIdx % colors.length],
+                backgroundColor: colors[colorIdx % colors.length],
+                tension: 0.3,
+                spanGaps: true 
+            });
+            colorIdx++;
+        }
+
+        if (myChart) { myChart.destroy(); }
+        const ctx = document.getElementById('rankChart').getContext('2d');
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: sortedDates, datasets: datasets },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    y: {
+                        reverse: true,
+                        min: 1,
+                        ticks: { stepSize: 1, callback: function(val) { return val + '위'; } }
+                    }
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
