@@ -401,7 +401,7 @@ def get_ranking(keyword, target_place_url, target_meta=None, fast_only=True, inc
 # ==========================================
 # 5. 백그라운드 갱신 작업 스레드
 # ==========================================
-REFRESH_CONCURRENCY = int(os.environ.get("NAVER_REFRESH_CONCURRENCY", "4"))
+REFRESH_CONCURRENCY = int(os.environ.get("NAVER_REFRESH_CONCURRENCY", "2"))
 HISTORY_LOCK = threading.Lock()
 
 def process_keyword(user_id, kw, url, meta, driver):
