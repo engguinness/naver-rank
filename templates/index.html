@@ -1119,7 +1119,7 @@
         }
 
         function formatRank(value) {
-            if (value === null || value === undefined || value === '') return '20위권 밖';
+            if (value === null || value === undefined || value === '' || value === 0) return '20위권 밖';
             return Number(value).toLocaleString('ko-KR');
         }
 
@@ -1262,7 +1262,7 @@
 
         // 7. 단일 검색 로직
         function renderSearchSuccess(data, placeAlias, placeUrl) {
-            const isOut = data.status === 'out_of_top';
+            const isOut = !data.total_rank && !data.pure_rank;
             const vReviews = isOut ? '확인불가' : (data.visitor_reviews !== null ? data.visitor_reviews : '확인불가');
             const bReviews = isOut ? '확인불가' : (data.blog_reviews !== null ? data.blog_reviews : '확인불가');
             const totalRank = isOut ? '20위권 밖' : `${data.total_rank}위`;
