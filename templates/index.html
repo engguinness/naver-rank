@@ -3,310 +3,1275 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>네이버 플레이스 순위 추적기 (VIP)</title>
+    <title>플레이스 순위 확인 시스템</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <style>
-        body { font-family: 'Pretendard', -apple-system, sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; margin: 0; padding: 40px 20px; }
-        .container { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 100%; max-width: 600px; text-align: center; }
-        h2 { color: #333; margin-bottom: 24px; }
-        .input-group { margin-bottom: 16px; text-align: left; }
-        label { display: block; margin-bottom: 6px; font-weight: bold; font-size: 14px; color: #555; }
-        input { width: 100%; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; outline: none; transition: 0.3s; box-sizing: border-box;}
-        input:focus { border-color: #03c75a; box-shadow: 0 0 0 3px rgba(3,199,90,0.1); }
-        button.action-btn { width: 100%; padding: 14px; background-color: #03c75a; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.3s; margin-top: 10px; }
-        button.action-btn:hover { background-color: #02b351; }
-        button.action-btn:disabled { background-color: #ccc; cursor: not-allowed; }
-        
-        .tab-menu { display: flex; gap: 10px; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        .tab-btn { flex: 1; background: #f8f9fa; color: #888; border: none; font-size: 15px; font-weight: bold; cursor: pointer; padding: 12px; border-radius: 8px; transition: 0.2s; }
-        .tab-btn:hover { background: #e9ecef; }
-        .tab-btn.active { background: #03c75a; color: white; }
+        /* 전역 및 레이아웃 설정 */
+        body { 
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; 
+            background-color: #f1f5f9; 
+            margin: 0; 
+            padding: 0; 
+            display: flex; 
+            height: 100vh;
+            color: #334155;
+            overflow: hidden;
+        }
 
-        #appScreen, #result, #searchView, #historyView { display: none; }
-        .rank-box { font-size: 18px; margin: 8px 0; color: #555; background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: left;}
-        .highlight { color: #03c75a; font-size: 24px; font-weight: bold; }
-        .loader { display: none; margin: 20px auto; border: 4px solid #f3f3f3; border-top: 4px solid #03c75a; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* 로그인 화면 전용 레이아웃 */
+        #loginContainer {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f8fafc;
+            position: absolute;
+            top: 0; left: 0;
+            z-index: 2000;
+        }
+        .login-box {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        .login-box h2 {
+            color: #1a73e8;
+            margin-bottom: 25px;
+            font-weight: 800;
+        }
+
+        /* 사이드바 메뉴 */
+        .sidebar {
+            width: 260px;
+            background-color: #0f172a;
+            color: #cbd5e1;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+        .sidebar-header {
+            padding: 25px 20px;
+            font-size: 20px;
+            font-weight: 800;
+            color: white;
+            border-bottom: 1px solid #1e293b;
+            text-align: center;
+            letter-spacing: 1px;
+        }
+        .menu-list {
+            list-style: none;
+            padding: 0;
+            margin: 20px 0;
+            flex-grow: 1;
+        }
+        .menu-item {
+            padding: 16px 25px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+        }
+        .menu-item:hover {
+            background-color: #1e293b;
+            color: white;
+        }
+        .menu-item.active {
+            background-color: #1a73e8;
+            color: white;
+            border-right: 4px solid #60a5fa;
+            font-weight: bold;
+        }
+        .sidebar-footer {
+            padding: 20px;
+            border-top: 1px solid #1e293b;
+            font-size: 13px;
+            text-align: center;
+            color: #94a3b8;
+        }
+
+        /* 메인 컨텐츠 영역 */
+        .main-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow-y: auto;
+        }
+        .top-header {
+            background: white;
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e2e8f0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+        .top-header h2 {
+            margin: 0;
+            font-size: 22px;
+            color: #0f172a;
+        }
+        .content-area {
+            padding: 40px;
+            max-width: 100%;
+            width: 100%;
+            box-sizing: border-box;
+            margin: 0 auto;
+        }
+        .view-section {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+        .view-section.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 패널 (박스) 스타일 */
+        .panel { 
+            background: #ffffff; 
+            padding: 25px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.03); 
+            margin-bottom: 25px; 
+            border: 1px solid #eef0f3;
+        }
+        .panel-title { 
+            margin-top: 0; 
+            margin-bottom: 20px; 
+            font-size: 16px; 
+            color: #202124; 
+            border-bottom: 2px solid #1a73e8; 
+            padding-bottom: 10px; 
+            display: inline-block;
+        }
+
+        /* 위젯 (대시보드용) */
+        .widget-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .widget {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.02);
+            text-align: center;
+        }
+        .widget-title { color: #64748b; font-size: 14px; margin-bottom: 10px; }
+        .widget-value { color: #1a73e8; font-size: 32px; font-weight: 800; }
+
+        /* 폼 및 버튼 */
+        input, select { 
+            width: 100%; 
+            padding: 14px 15px; 
+            margin-bottom: 12px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 8px; 
+            font-size: 15px; 
+            box-sizing: border-box; 
+            background-color: #f8fafc;
+        }
+        input:focus, select:focus { border-color: #1a73e8; outline: none; background-color: #ffffff; }
         
-        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .logout-btn { background: #ff4d4f; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
-        .logout-btn:hover { background: #d9363e; }
+        .btn { 
+            width: 100%; 
+            padding: 14px; 
+            border-radius: 8px; 
+            border: none; 
+            font-size: 15px; 
+            font-weight: bold; 
+            cursor: pointer; 
+            color: white; 
+            box-sizing: border-box;
+        }
+        .btn-primary { background-color: #1a73e8; margin-bottom: 10px; }
+        .btn-warning { background-color: #f59e0b; }
+        .btn-sm { width: auto; padding: 8px 16px; font-size: 13px; background-color: #f3f4f6; color: #4b5563; border: 1px solid #d1d5db; }
+        .btn-sm:hover { background-color: #e5e7eb; color: #111827; }
+
+        /* 리스트 및 결과 박스 */
+        .place-list-item { 
+            display: flex; justify-content: space-between; align-items: center; 
+            padding: 16px; background-color: #f8fafc; border: 1px solid #e2e8f0; 
+            border-radius: 8px; margin-bottom: 10px;
+        }
+        .place-url-text { font-size: 14px; color: #334155; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
         
-        table { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 14px; text-align: center; }
-        th, td { padding: 12px 10px; border-bottom: 1px solid #eee; }
-        th { background-color: #f8f9fa; color: #333; font-weight: bold; }
-        .kw-badge { background: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 13px; display: inline-block;}
-        canvas { max-height: 300px; margin-top: 20px; }
+        .result-box { margin-top: 20px; padding: 20px; border-radius: 8px; background: #f0fdf4; border: 1px solid #bbf7d0; display: none; }
+        .loading { color: #f59e0b; font-weight: bold; text-align: center; margin-top: 15px; }
+
+        /* 모달 팝업 */
+        #modalOverlay { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(15, 23, 42, 0.7); z-index: 3000; display: none; 
+            justify-content: center; align-items: flex-start; padding-top: 5vh; backdrop-filter: blur(3px);
+        }
+        .modal-content { 
+            background: white; padding: 30px; border-radius: 16px; width: 90%; max-width: 750px; 
+            max-height: 85vh; overflow-y: auto; position: relative; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); box-sizing: border-box;
+        }
+        .close-btn { position: absolute; top: 20px; right: 25px; font-size: 24px; cursor: pointer; color: #94a3b8; }
+        .close-btn:hover { color: #0f172a; }
+
+        /* 테이블 */
+        .modal-header-url { font-size: 18px; color: #1e293b; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #e2e8f0; word-break: break-all; }
+        .date-block { margin-bottom: 25px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+        .date-block-title { background: #f8fafc; padding: 14px 18px; font-size: 15px; font-weight: 600; color: #334155; border-bottom: 1px solid #e2e8f0; }
+        table { width: 100%; text-align: center; border-collapse: collapse; }
+        th, td { padding: 14px 10px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+        th { background-color: #ffffff; color: #64748b; font-weight: 600; }
+        .rank-highlight { color: #e11d48; font-weight: bold; }
+        .pure-highlight { color: #0284c7; font-weight: bold; }
+
+        .rank-control-panel {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 18px;
+            margin-bottom: 24px;
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+        }
+        .rank-input-row {
+            display: grid;
+            grid-template-columns: 150px 1fr 2fr 1fr;
+            gap: 14px;
+            align-items: center;
+        }
+        .rank-input-row input,
+        .rank-input-row select {
+            margin-bottom: 0;
+            height: 48px;
+            border-radius: 10px;
+            background: #f8fafc;
+        }
+        .rank-add-btn {
+            margin-top: 16px;
+            height: 54px;
+            border-radius: 8px;
+            font-size: 26px;
+            line-height: 1;
+            background: #2946df;
+            box-shadow: 0 5px 12px rgba(41, 70, 223, 0.28);
+        }
+        .analysis-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            margin: 22px 0;
+        }
+        .analysis-count {
+            font-size: 17px;
+            font-weight: 700;
+            color: #1f2937;
+        }
+        .analysis-button-row {
+            display: flex;
+            gap: 10px;
+        }
+        .analysis-button-row .btn {
+            width: auto;
+            min-width: 120px;
+            background: #2946df;
+            box-shadow: 0 5px 12px rgba(41, 70, 223, 0.22);
+        }
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(360px, 1fr));
+            gap: 22px;
+        }
+        .chart-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 24px;
+            min-height: 420px;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+        }
+        .chart-card-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: flex-start;
+            margin-bottom: 14px;
+        }
+        .chart-card-title h4 {
+            margin: 0;
+            color: #1f2937;
+            font-size: 20px;
+            font-weight: 800;
+        }
+        .chart-card-title .place-name {
+            color: #64748b;
+            font-size: 13px;
+            margin-top: 4px;
+        }
+        .chart-meta {
+            color: #64748b;
+            font-size: 12px;
+            text-align: right;
+            line-height: 1.5;
+        }
+        .chart-canvas-wrap {
+            position: relative;
+            width: 100%;
+            height: 330px;
+        }
+        .alias-edit {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .alias-edit input {
+            margin-bottom: 0;
+            height: 36px;
+            padding: 8px 10px;
+            font-size: 13px;
+        }
+        .alias-edit .btn-sm {
+            white-space: nowrap;
+        }
+        .toggle-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #1f2937;
+            font-weight: 700;
+        }
+        .switch {
+            position: relative;
+            width: 52px;
+            height: 28px;
+            display: inline-block;
+        }
+        .switch input { display: none; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: #9ca3af;
+            border-radius: 999px;
+            transition: 0.2s;
+        }
+        .slider:before {
+            content: "";
+            position: absolute;
+            width: 26px;
+            height: 26px;
+            left: 1px;
+            top: 1px;
+            background: white;
+            border-radius: 50%;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.22);
+            transition: 0.2s;
+        }
+        .switch input:checked + .slider { background: #8aa0f7; }
+        .switch input:checked + .slider:before {
+            transform: translateX(24px);
+            background: #2946df;
+        }
+        .table-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 24px;
+            min-height: 320px;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+        }
+        .place-heading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #1f2937;
+            font-size: 18px;
+            font-weight: 800;
+            margin-bottom: 18px;
+        }
+        .place-heading a {
+            color: #2946df;
+            text-decoration: underline;
+        }
+        .analysis-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+        .analysis-table th,
+        .analysis-table td {
+            border: 1px solid #e5e7eb;
+            padding: 13px 8px;
+            font-size: 14px;
+            color: #374151;
+            background: #fff;
+        }
+        .analysis-table th {
+            font-weight: 800;
+            background: #fff;
+        }
+        .analysis-table .red { color: #e11d48; font-weight: 800; }
+        .analysis-table .blue { color: #2946df; font-weight: 800; }
+        #analysisCards .empty-state {
+            grid-column: 1 / -1;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 42px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        @media (max-width: 980px) {
+            .rank-input-row { grid-template-columns: 1fr; }
+            .chart-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div id="loginScreen">
-        <h2>🔒 VIP 전용 대시보드</h2>
-        <p style="color:#666; margin-bottom: 30px;">초대받은 분들만 이용할 수 있는 프라이빗 시스템입니다.</p>
-        
-        <div class="input-group">
-            <label>사용자 이름 (ID)</label>
-            <input type="text" id="userId" placeholder="본인 이름을 입력하세요">
+    <div id="loginContainer">
+        <div class="login-box">
+            <h2>시스템 로그인</h2>
+            <input type="text" id="userIdInput" placeholder="사용자 ID를 입력해 주십시오" onkeypress="if(event.key === 'Enter') login()">
+            <button class="btn btn-primary" onclick="login()">접속하기</button>
         </div>
-        
-        <div class="input-group" style="margin-bottom: 24px;">
-            <label>비밀 입장 코드</label>
-            <input type="password" id="accessCode" placeholder="비밀 코드를 입력하세요">
-        </div>
-
-        <button class="action-btn" onclick="login()">인증하고 입장하기</button>
     </div>
 
-    <div id="appScreen">
-        <div class="header-bar">
-            <h3 style="margin: 0;">📍 <span id="displayUser" style="color:#03c75a;"></span>님의 공간</h3>
-            <button class="logout-btn" onclick="logout()">로그아웃</button>
-        </div>
-
-        <div class="tab-menu">
-            <button class="tab-btn active" id="btnSearch" onclick="switchTab('search')">🔍 검색하기</button>
-            <button class="tab-btn" id="btnHistory" onclick="switchTab('history')">📊 이전 기록 확인</button>
-        </div>
-
-        <div id="searchView" style="display: block;">
-            <div class="input-group">
-                <label>검색할 키워드</label>
-                <input type="text" id="keyword" placeholder="예: 김해영어회화">
+    <div id="appLayout" style="display: none; width: 100%;">
+        
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                SEO Master
             </div>
-            <div class="input-group">
-                <label>내 업체명</label>
-                <input type="text" id="targetName" placeholder="예: 저스트잉글리시">
+            <ul class="menu-list">
+                <li class="menu-item active" onclick="switchTab('dashboard')" id="nav-dashboard">대시보드 요약</li>
+                <li class="menu-item" onclick="switchTab('search')" id="nav-search">순위 검색 및 업데이트</li>
+                <li class="menu-item" onclick="switchTab('places')" id="nav-places">등록된 플레이스 관리</li>
+                <li class="menu-item" onclick="switchTab('charts')" id="nav-charts">순위 그래프 분석</li>
+            </ul>
+            <div class="sidebar-footer">
+                <span id="sidebarUserMsg"></span>
             </div>
+        </nav>
+
+        <main class="main-content">
+            <header class="top-header">
+                <h2 id="pageTitleText">대시보드 요약</h2>
+                <div style="font-size: 14px; color: #64748b;">
+                    <span id="welcomeMsg"></span>
+                </div>
+            </header>
+
+            <div class="content-area">
+                
+                <section id="view-dashboard" class="view-section active">
+                    <div class="widget-grid">
+                        <div class="widget">
+                            <div class="widget-title">총 등록된 플레이스</div>
+                            <div class="widget-value" id="dashTotalPlaces">0</div>
+                        </div>
+                        <div class="widget">
+                            <div class="widget-title">모니터링 중인 키워드</div>
+                            <div class="widget-value" id="dashTotalKeywords">0</div>
+                        </div>
+                    </div>
+                    
+                    <div class="panel">
+                        <h3 class="panel-title">시스템 안내</h3>
+                        <p style="color: #475569; line-height: 1.6; font-size: 14px;">
+                            좌측 메뉴를 통해 원하시는 기능을 선택해 주십시오.<br>
+                            - 순위 검색 및 업데이트: 새로운 플레이스와 키워드를 검색하거나 기존 데이터를 최신화합니다.<br>
+                            - 등록된 플레이스 관리: 누적된 검색 기록을 주소별로 모아서 상세하게 확인합니다.<br>
+                            - 순위 그래프 분석: 플레이스별 키워드 순위 변동 추이를 시각적으로 확인합니다.
+                        </p>
+                    </div>
+                </section>
+
+                <section id="view-search" class="view-section">
+                    <div class="panel" style="max-width: 600px;">
+                        <h3 class="panel-title">새로운 순위 검색</h3>
+                        <input type="text" id="aliasInput" placeholder="별명 (예: 김포점, 노원점)">
+                        <input type="text" id="keywordInput" placeholder="검색할 키워드 (예: 강남 맛집)">
+                        <input type="text" id="placeUrlInput" placeholder="플레이스 URL (https://naver.me/...)">
+                        
+                        <button class="btn btn-primary" id="searchBtn" onclick="searchRank()">단일 순위 검색 진행</button>
+                        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+                        <button class="btn btn-warning" id="refreshBtn" onclick="refreshAll()">시스템 전체 순위 최신화</button>
+                        
+                        <div id="resultBox" class="result-box">
+                            <div id="loadingText" class="loading" style="display: none;">네이버에서 데이터를 분석하고 있습니다...</div>
+                            <div id="resultContent" style="color: #166534; font-size: 14px; line-height: 1.6;"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="view-places" class="view-section">
+                    <div class="panel">
+                        <h3 class="panel-title">데이터 보관함</h3>
+                        <div id="places-list-container">
+                            <div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 14px;">데이터를 불러오고 있습니다...</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="view-charts" class="view-section">
+                    <div class="rank-control-panel">
+                        <div class="rank-input-row">
+                            <select id="analysisGroupSelect">
+                                <option value="기본">기본</option>
+                            </select>
+                            <input type="text" id="analysisKeywordInput" placeholder="검색할 키워드를 입력해주세요">
+                            <input type="text" id="analysisUrlInput" placeholder="검색할 플레이스 URL을 입력해주세요.">
+                            <input type="text" id="analysisAliasInput" placeholder="별명">
+                        </div>
+                        <button class="btn rank-add-btn" onclick="searchFromAnalysis()">+</button>
+                    </div>
+
+                    <div class="analysis-actions">
+                        <div class="analysis-count" id="analysisCount">※ 등록 플레이스 0개 / 0개</div>
+                        <div class="analysis-button-row">
+                            <button class="btn" onclick="alert('알림톡 기능은 추후 연결할 수 있습니다.')">알림톡</button>
+                            <button class="btn" onclick="switchTab('places')">그룹관리</button>
+                            <button class="btn" id="analysisRefreshBtn" onclick="refreshAll()">전체갱신</button>
+                            <div class="toggle-wrap" aria-label="표 차트 보기 전환">
+                                <span>표</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="analysisModeToggle" onchange="setAnalysisMode(this.checked ? 'chart' : 'table')">
+                                    <span class="slider"></span>
+                                </label>
+                                <span>차트</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="analysisCards" class="chart-grid"></div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <div id="modalOverlay">
+        <div class="modal-content">
+            <span class="close-btn" onclick="closeModal()">&times;</span>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentUserId = '';
+        let cachedPlacesData = []; 
+        let chartInstances = [];
+
+        // 1. 로그인 및 초기화
+        async function login() {
+            const userId = document.getElementById('userIdInput').value.trim();
+            if (!userId) {
+                alert('사용자 ID를 입력해 주십시오.');
+                return;
+            }
+            currentUserId = userId;
             
-            <button class="action-btn" id="searchBtn" onclick="searchRank()">순위 확인 및 저장</button>
-            <div class="loader" id="loader"></div>
+            document.getElementById('loginContainer').style.display = 'none';
+            document.getElementById('appLayout').style.display = 'flex';
             
-            <div id="result">
-                <div class="rank-box">
-                    <div style="font-size: 15px;">📢 검색 업체: <b id="resName" style="color:#333;"></b></div>
-                    <div style="margin-top: 15px; border-top: 1px dashed #ddd; padding-top: 15px;">
-                        🚀 순수 순위: <span class="highlight" id="resPure"></span>위 <br>
-                        <span style="font-size: 14px; color: #888;">(광고포함 전체 순위: <b id="resTotal"></b>위)</span>
+            document.getElementById('welcomeMsg').innerText = `접속 계정: ${currentUserId}`;
+            document.getElementById('sidebarUserMsg').innerText = `ID: ${currentUserId}`;
+            
+            await fetchAndRenderPlaces();
+        }
+
+        // 2. 탭 전환 로직
+        function switchTab(tabName) {
+            document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById(`view-${tabName}`).classList.add('active');
+            document.getElementById(`nav-${tabName}`).classList.add('active');
+
+            const titles = {
+                'dashboard': '대시보드 요약',
+                'search': '순위 검색 및 업데이트',
+                'places': '등록된 플레이스 관리',
+                'charts': '순위 그래프 분석'
+            };
+            document.getElementById('pageTitleText').innerText = titles[tabName];
+            if (tabName === 'charts') renderAnalysisCards();
+        }
+
+        // 3. 데이터 가져오기 및 렌더링 (리스트 및 차트 셀렉트)
+        async function fetchAndRenderPlaces() {
+            const container = document.getElementById('places-list-container');
+            
+            try {
+                const response = await fetch('/history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: currentUserId })
+                });
+
+                const data = await response.json();
+                let totalKeywordsCount = 0;
+
+                if (data.status === "success" && data.places && data.places.length > 0) {
+                    cachedPlacesData = data.places;
+                    container.innerHTML = ''; 
+
+                    cachedPlacesData.forEach(place => {
+                        let rankInfoArray = [];
+                        const displayName = getPlaceDisplayName(place);
+                        const realName = place.place_name || '플레이스명 수집 전';
+                        
+                        if(place.history.length > 0) {
+                            totalKeywordsCount += place.history[0].keywords.length;
+                            
+                            // 플레이스 리스트에 보여줄 최근 순위 텍스트 생성
+                            place.history[0].keywords.forEach(kw => {
+                                const rankStr = formatRank(kw.pure_rank);
+                                rankInfoArray.push(`${kw.keyword} ${rankStr}`);
+                            });
+                        }
+
+                        const recentInfoHtml = rankInfoArray.length > 0 
+                            ? `<div style="font-size:12.5px; color:#1a73e8; margin-top:5px; font-weight:bold;">최근 순위: [ ${rankInfoArray.join(', ')} ]</div>` 
+                            : '';
+
+                        const item = document.createElement('div');
+                        item.className = 'place-list-item';
+                        item.innerHTML = `
+                            <div style="max-width: 75%;">
+                                <div style="font-size:16px; font-weight:800; color:#1f2937;">${escapeHtml(displayName)}</div>
+                                <div class="place-url-text" title="${escapeHtml(place.target_place_url)}">${escapeHtml(realName)} · ${escapeHtml(place.target_place_url)}</div>
+                                ${recentInfoHtml}
+                                <div class="alias-edit">
+                                    <input type="text" id="alias-${placeKey(place.target_place_url)}" value="${escapeHtml(place.place_alias || '')}" placeholder="별명 입력">
+                                    <button class="btn btn-sm" onclick="saveAlias('${encodeURIComponent(place.target_place_url)}')">별명 저장</button>
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+                                <button class="btn btn-sm place-refresh-btn" onclick="refreshPlace('${encodeURIComponent(place.target_place_url)}')">최신화</button>
+                                <button class="btn btn-sm" onclick="openDetailModal('${encodeURIComponent(place.target_place_url)}')">상세 기록 보기</button>
+                            </div>
+                        `;
+                        container.appendChild(item);
+                    });
+
+                    document.getElementById('dashTotalPlaces').innerText = cachedPlacesData.length;
+                    document.getElementById('dashTotalKeywords').innerText = totalKeywordsCount;
+
+                } else {
+                    cachedPlacesData = [];
+                    container.innerHTML = '<div style="text-align:center; padding: 20px; color: #94a3b8; font-size: 14px;">저장된 기록이 없습니다.</div>';
+                    document.getElementById('dashTotalPlaces').innerText = "0";
+                    document.getElementById('dashTotalKeywords').innerText = "0";
+                }
+
+                renderAnalysisCards();
+
+            } catch (error) {
+                container.innerHTML = '<div style="text-align:center; padding: 20px; color: #e11d48; font-size: 14px;">서버 통신에 실패하였습니다.</div>';
+            }
+        }
+
+        function renderAnalysisCards() {
+            const container = document.getElementById('analysisCards');
+            if (!container) return;
+
+            chartInstances.forEach(chart => chart.destroy());
+            chartInstances = [];
+
+            const showChart = document.getElementById('analysisModeToggle')?.checked ?? false;
+            const showTable = !showChart;
+            document.getElementById('analysisCount').innerText = `※ 등록 플레이스 ${cachedPlacesData.length}개 / ${cachedPlacesData.length}개`;
+
+            if (cachedPlacesData.length === 0) {
+                container.innerHTML = '<div class="empty-state">등록된 플레이스가 없습니다.</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+            cachedPlacesData.forEach((place, idx) => {
+                if (showTable) {
+                    getPlaceKeywords(place).forEach(keyword => {
+                        container.appendChild(createKeywordTableCard(place, keyword));
+                    });
+                }
+                if (showChart) container.appendChild(createChartCard(place, idx));
+            });
+
+            if (showChart) {
+                requestAnimationFrame(() => {
+                    cachedPlacesData.forEach((place, idx) => drawPlaceChart(place, `analysis-chart-${idx}`));
+                });
+            }
+        }
+
+        function setAnalysisMode(mode) {
+            const modeToggle = document.getElementById('analysisModeToggle');
+            if (!modeToggle) return;
+
+            modeToggle.checked = mode === 'chart';
+            renderAnalysisCards();
+        }
+
+        function createChartCard(place, idx) {
+            const card = document.createElement('div');
+            card.className = 'chart-card';
+            card.innerHTML = `
+                <div class="chart-card-title">
+                    <div>
+                        <h4>${escapeHtml(getPlaceDisplayName(place))}</h4>
+                        <div class="place-name">${escapeHtml(place.place_name || place.target_place_url)}</div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <button class="btn btn-sm place-refresh-btn" onclick="refreshPlace('${encodeURIComponent(place.target_place_url)}')">최신화</button>
+                        <div class="chart-meta">${latestMetaText(place)}</div>
                     </div>
                 </div>
-                <p id="successMsg" style="color: #03c75a; font-weight: bold; display: none; margin-top: 15px;">✅ 저장이 완료되었습니다. 기록 탭을 확인하세요!</p>
-            </div>
-        </div>
+                <div class="chart-canvas-wrap">
+                    <canvas id="analysis-chart-${idx}"></canvas>
+                </div>
+            `;
+            return card;
+        }
 
-        <div id="historyView">
-            <div id="chartContainer" style="display: none;">
-                <canvas id="rankChart"></canvas>
-            </div>
-
-            <div id="tableContainer" style="display: none;">
-                <table>
+        function createKeywordTableCard(place, keyword) {
+            const rows = flattenPlaceRows(place).filter(row => row.keyword === keyword).slice(0, 7);
+            const card = document.createElement('div');
+            card.className = 'table-card';
+            card.innerHTML = `
+                <div class="place-heading">
+                    <span>📍</span>
+                    <span>${escapeHtml(getPlaceDisplayName(place))}</span>
+                    <a href="${escapeHtml(place.target_place_url)}" target="_blank">${escapeHtml(place.place_name || '플레이스')}</a>
+                    <span style="color:#475569; font-size:14px; font-weight:700;">${escapeHtml(keyword)}</span>
+                    <button class="btn btn-sm place-refresh-btn" onclick="refreshPlace('${encodeURIComponent(place.target_place_url)}')">최신화</button>
+                    <button class="btn btn-sm" style="color:#dc2626;" onclick="deleteKeyword('${encodeURIComponent(place.target_place_url)}', '${encodeURIComponent(keyword)}')">키워드 삭제</button>
+                </div>
+                <table class="analysis-table">
                     <thead>
                         <tr>
-                            <th>검색어</th>
-                            <th>날짜</th>
+                            <th>일자</th>
                             <th>순위</th>
+                            <th>전체</th>
+                            <th>블로그리뷰</th>
+                            <th>방문자리뷰</th>
                         </tr>
                     </thead>
-                    <tbody id="historyBody">
+                    <tbody>
+                        ${rows.map((row, i) => {
+                            const prev = rows[i + 1] || row;
+                            return `
+                                <tr>
+                                    <td>${formatShortDate(row.date)}</td>
+                                    <td class="${rankTrendClass(row.pure_rank, prev.pure_rank)}">${formatRank(row.pure_rank)}</td>
+                                    <td class="${rankTrendClass(row.total_rank, prev.total_rank)}">${formatRank(row.total_rank)}</td>
+                                    <td class="${reviewTrendClass(row.blog_reviews, prev.blog_reviews)}">${formatReview(row.blog_reviews)}</td>
+                                    <td class="${reviewTrendClass(row.visitor_reviews, prev.visitor_reviews)}">${formatReview(row.visitor_reviews)}</td>
+                                </tr>
+                            `;
+                        }).join('')}
                     </tbody>
                 </table>
-            </div>
-            
-            <div id="noDataMsg" style="padding: 40px 0; color: #888; display: none;">
-                아직 저장된 검색 기록이 없습니다.<br>'검색하기' 메뉴에서 먼저 순위를 측정해 보세요!
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-    let currentUser = "";
-    let myChart = null;
-
-    // 💥 마스터 비밀번호 설정 (여기서 원하시는 비밀번호로 변경하세요!)
-    const MASTER_PASSWORD = "just"; 
-
-    function login() {
-        const userId = document.getElementById('userId').value.trim();
-        const accessCode = document.getElementById('accessCode').value.trim();
-        
-        if(!userId) { alert("사용자 이름을 입력해주세요!"); return; }
-        
-        // 💥 비밀번호 검사 로직
-        if(accessCode !== MASTER_PASSWORD) {
-            alert("비밀 코드가 일치하지 않습니다. 관리자에게 문의하세요.");
-            return;
-        }
-        
-        currentUser = userId;
-        document.getElementById('loginScreen').style.display = 'none';
-        document.getElementById('appScreen').style.display = 'block';
-        document.getElementById('displayUser').innerText = currentUser;
-        
-        const savedKeyword = localStorage.getItem(`kw_${currentUser}`);
-        const savedTarget = localStorage.getItem(`tn_${currentUser}`);
-        if (savedKeyword) document.getElementById('keyword').value = savedKeyword;
-        else document.getElementById('keyword').value = "";
-        if (savedTarget) document.getElementById('targetName').value = savedTarget;
-        else document.getElementById('targetName').value = ""; 
-
-        switchTab('search'); 
-    }
-
-    function logout() {
-        currentUser = "";
-        document.getElementById('userId').value = "";
-        document.getElementById('accessCode').value = ""; // 로그아웃 시 비밀번호 창 비우기
-        document.getElementById('appScreen').style.display = 'none';
-        document.getElementById('loginScreen').style.display = 'block';
-        document.getElementById('result').style.display = 'none';
-        document.getElementById('successMsg').style.display = 'none';
-        if(myChart) myChart.destroy();
-    }
-
-    function switchTab(tabName) {
-        if(tabName === 'search') {
-            document.getElementById('searchView').style.display = 'block';
-            document.getElementById('historyView').style.display = 'none';
-            document.getElementById('btnSearch').classList.add('active');
-            document.getElementById('btnHistory').classList.remove('active');
-        } else if(tabName === 'history') {
-            document.getElementById('searchView').style.display = 'none';
-            document.getElementById('historyView').style.display = 'block';
-            document.getElementById('btnSearch').classList.remove('active');
-            document.getElementById('btnHistory').classList.add('active');
-            loadHistory(); 
-        }
-    }
-
-    async function searchRank() {
-        const keyword = document.getElementById('keyword').value;
-        const targetName = document.getElementById('targetName').value;
-        
-        if(!keyword || !targetName) { alert('모두 입력해주세요!'); return; }
-
-        document.getElementById('loader').style.display = 'block';
-        document.getElementById('result').style.display = 'none';
-        document.getElementById('successMsg').style.display = 'none'; 
-        document.getElementById('searchBtn').disabled = true;
-        document.getElementById('searchBtn').innerText = "순위 찾는 중...";
-
-        try {
-            const response = await fetch('/search', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: currentUser, keyword, target_name: targetName })
-            });
-            const data = await response.json();
-
-            document.getElementById('loader').style.display = 'none';
-            document.getElementById('searchBtn').disabled = false;
-            document.getElementById('searchBtn').innerText = "순위 확인 및 저장";
-
-            if(data.status === 'success') {
-                document.getElementById('resName').innerText = data.name;
-                document.getElementById('resPure').innerText = data.pure_rank;
-                document.getElementById('resTotal').innerText = data.total_rank;
-                document.getElementById('result').style.display = 'block';
-                document.getElementById('successMsg').style.display = 'block'; 
-
-                localStorage.setItem(`kw_${currentUser}`, keyword);
-                localStorage.setItem(`tn_${currentUser}`, targetName);
-
-            } else {
-                alert(`찾지 못했습니다. 키워드나 업체명을 다시 확인해 주세요.`);
-            }
-        } catch(e) {
-            alert('서버 오류가 발생했습니다.');
-            document.getElementById('loader').style.display = 'none';
-            document.getElementById('searchBtn').disabled = false;
-            document.getElementById('searchBtn').innerText = "순위 확인 및 저장";
-        }
-    }
-
-    async function loadHistory() {
-        const response = await fetch('/history', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: currentUser })
-        });
-        const historyData = await response.json();
-
-        if (Object.keys(historyData).length === 0) {
-            document.getElementById('chartContainer').style.display = 'none';
-            document.getElementById('tableContainer').style.display = 'none';
-            document.getElementById('noDataMsg').style.display = 'block';
-            return;
+            `;
+            return card;
         }
 
-        document.getElementById('noDataMsg').style.display = 'none';
-        document.getElementById('chartContainer').style.display = 'block';
-        document.getElementById('tableContainer').style.display = 'block';
+        function drawPlaceChart(place, canvasId) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const sortedHistory = [...place.history].reverse();
+            const dates = sortedHistory.map(h => formatShortDate(h.date));
+            const keywords = [...new Set(sortedHistory.flatMap(h => h.keywords.map(k => k.keyword)))];
+            const colors = ['#2f80ed', '#e91e63', '#34a853', '#f59e0b', '#8b5cf6', '#ef4444'];
+            const datasets = keywords.map((kw, idx) => ({
+                label: kw,
+                data: sortedHistory.map(h => {
+                    const k = h.keywords.find(item => item.keyword === kw);
+                    return k && k.pure_rank !== null ? k.pure_rank : null;
+                }),
+                borderColor: colors[idx % colors.length],
+                backgroundColor: colors[idx % colors.length],
+                tension: 0.18,
+                pointRadius: 4,
+                pointHoverRadius: 7
+            }));
 
-        let allDates = new Set();
-        for (const key in historyData) {
-            Object.keys(historyData[key]).forEach(date => allDates.add(date));
-        }
-        const sortedDates = Array.from(allDates).sort(); 
-
-        const datasets = [];
-        const colors = ['#03c75a', '#ff6b6b', '#4dabf7', '#fcc419', '#845ef7'];
-        let colorIdx = 0;
-
-        const tbody = document.getElementById('historyBody');
-        tbody.innerHTML = ''; 
-
-        for (const key in historyData) {
-            const keywordName = key.split('_')[0]; 
-            
-            const datesForKey = Object.keys(historyData[key]).sort().reverse();
-            datesForKey.forEach(date => {
-                const info = historyData[key][date];
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><span class="kw-badge">${keywordName}</span></td>
-                    <td style="font-size: 13px; color: #555;">${date}</td>
-                    <td><b style="color:#03c75a; font-size: 16px;">${info.pure_rank}위</b></td>
-                `;
-                tbody.appendChild(tr);
-            });
-
-            const rankData = sortedDates.map(date => {
-                return historyData[key][date] ? historyData[key][date].pure_rank : null; 
-            });
-
-            datasets.push({
-                label: keywordName,
-                data: rankData,
-                borderColor: colors[colorIdx % colors.length],
-                backgroundColor: colors[colorIdx % colors.length],
-                tension: 0.3,
-                spanGaps: true 
-            });
-            colorIdx++;
-        }
-
-        if (myChart) { myChart.destroy(); }
-        const ctx = document.getElementById('rankChart').getContext('2d');
-        myChart = new Chart(ctx, {
-            type: 'line',
-            data: { labels: sortedDates, datasets: datasets },
-            options: {
-                responsive: true,
-                interaction: { mode: 'index', intersect: false },
-                scales: {
-                    y: {
-                        reverse: true,
-                        min: 1,
-                        ticks: { stepSize: 1, callback: function(val) { return val + '위'; } }
+            const chart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { labels: dates, datasets },
+                plugins: [ChartDataLabels],
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: { padding: { top: 22, right: 14, bottom: 2, left: 4 } },
+                    scales: {
+                        y: {
+                            reverse: true,
+                            min: 1,
+                            grid: { color: '#e5e7eb' },
+                            ticks: { callback: value => value + '위' }
+                        },
+                        x: {
+                            ticks: { maxRotation: 45, minRotation: 45 },
+                            grid: { color: '#f1f5f9' }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: keywords.length > 1 },
+                        datalabels: {
+                            backgroundColor: context => context.dataset.backgroundColor,
+                            borderRadius: 3,
+                            color: '#fff',
+                            padding: { top: 2, bottom: 2, left: 4, right: 4 },
+                            font: { weight: 'bold', size: 11 },
+                            formatter: value => value || ''
+                        }
                     }
                 }
-            }
-        });
-    }
-</script>
+            });
+            chartInstances.push(chart);
+        }
 
+        function getPlaceKeywords(place) {
+            const keywords = [];
+            place.history.forEach(day => {
+                day.keywords.forEach(kw => {
+                    if (!keywords.includes(kw.keyword)) keywords.push(kw.keyword);
+                });
+            });
+            return keywords;
+        }
+
+        function flattenPlaceRows(place) {
+            const rows = [];
+            place.history.forEach(day => {
+                day.keywords.forEach(kw => {
+                    rows.push({
+                        date: day.date,
+                        keyword: kw.keyword,
+                        total_rank: kw.total_rank,
+                        pure_rank: kw.pure_rank,
+                        visitor_reviews: day.visitor_reviews,
+                        blog_reviews: day.blog_reviews,
+                        time: kw.time
+                    });
+                });
+            });
+            return rows;
+        }
+
+        function getPlaceDisplayName(place) {
+            return place.place_alias || place.place_name || '플레이스';
+        }
+
+        function latestMetaText(place) {
+            const row = flattenPlaceRows(place)[0];
+            if (!row) return '';
+            return `최근 ${formatShortDate(row.date)}<br>방문자 ${formatReview(row.visitor_reviews)} · 블로그 ${formatReview(row.blog_reviews)}`;
+        }
+
+        function formatShortDate(date) {
+            if (!date) return '-';
+            const parts = date.split('-');
+            if (parts.length !== 3) return date;
+            return `${parts[0].slice(2)}.${parts[1]}.${parts[2]}`;
+        }
+
+        function formatPlain(value) {
+            if (value === null || value === undefined || value === '') return '-';
+            return Number(value).toLocaleString('ko-KR');
+        }
+
+        function formatRank(value) {
+            if (value === null || value === undefined || value === '') return '20위권 밖';
+            return Number(value).toLocaleString('ko-KR');
+        }
+
+        function formatReview(value) {
+            if (value === null || value === undefined || value === '') return '확인불가';
+            return Number(value).toLocaleString('ko-KR');
+        }
+
+        function rankTrendClass(current, previous) {
+            if (current === null || current === undefined || previous === null || previous === undefined) return '';
+            const diff = Number(current) - Number(previous);
+            if (diff === 0) return '';
+            return diff < 0 ? 'red' : 'blue';
+        }
+
+        function reviewTrendClass(current, previous) {
+            if (current === null || current === undefined || previous === null || previous === undefined) return '';
+            const diff = Number(current) - Number(previous);
+            if (diff === 0) return '';
+            return diff > 0 ? 'red' : 'blue';
+        }
+
+        function placeKey(value) {
+            return btoa(unescape(encodeURIComponent(value))).replace(/[^A-Za-z0-9]/g, '');
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[ch]));
+        }
+
+        async function saveAlias(encodedUrl) {
+            const targetUrl = decodeURIComponent(encodedUrl);
+            const input = document.getElementById(`alias-${placeKey(targetUrl)}`);
+            try {
+                const response = await fetch('/api/update_alias', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        target_place_url: targetUrl,
+                        place_alias: input.value.trim()
+                    })
+                });
+                const data = await response.json();
+                if (data.status !== 'success') throw new Error(data.message || '별명 저장 실패');
+                await fetchAndRenderPlaces();
+            } catch (e) {
+                alert('별명 저장에 실패했습니다.');
+            }
+        }
+
+        async function deleteKeyword(encodedUrl, encodedKeyword) {
+            const targetUrl = decodeURIComponent(encodedUrl);
+            const keyword = decodeURIComponent(encodedKeyword);
+
+            if (!confirm(`"${keyword}" 키워드 기록을 삭제하시겠습니까?`)) return;
+
+            try {
+                const response = await fetch('/api/delete_keyword', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        target_place_url: targetUrl,
+                        keyword: keyword
+                    })
+                });
+                const data = await response.json();
+                if (data.status !== 'success') throw new Error(data.message || '키워드 삭제 실패');
+                await fetchAndRenderPlaces();
+            } catch (e) {
+                alert('키워드 삭제에 실패했습니다.');
+            }
+        }
+
+        async function searchFromAnalysis() {
+            document.getElementById('keywordInput').value = document.getElementById('analysisKeywordInput').value;
+            document.getElementById('placeUrlInput').value = document.getElementById('analysisUrlInput').value;
+            document.getElementById('aliasInput').value = document.getElementById('analysisAliasInput').value;
+            await searchRank();
+            document.getElementById('analysisKeywordInput').value = '';
+            document.getElementById('analysisUrlInput').value = '';
+            document.getElementById('analysisAliasInput').value = '';
+            switchTab('charts');
+        }
+
+        // 6. 모달창 열기
+        function openDetailModal(targetUrl) {
+            targetUrl = decodeURIComponent(targetUrl);
+            const targetPlace = cachedPlacesData.find(p => p.target_place_url === targetUrl);
+            const modalBody = document.getElementById('modal-body');
+            
+            if (!targetPlace) return;
+
+            let html = `<div class="modal-header-url">플레이스 주소: <a href="${targetPlace.target_place_url}" target="_blank" style="color:#1a73e8; text-decoration:none;">${targetPlace.target_place_url}</a></div>`;
+            
+            targetPlace.history.forEach(day => {
+                const vReviews = formatReview(day.visitor_reviews);
+                const bReviews = formatReview(day.blog_reviews);
+                
+                html += `<div class="date-block">`;
+                html += `<div class="date-block-title">${day.date} <span style="font-size:13px; color:#64748b; font-weight:normal; margin-left:10px;">(방문자리뷰: ${vReviews} / 블로그리뷰: ${bReviews})</span></div>`;
+                html += `<table>
+                            <thead>
+                                <tr>
+                                    <th>키워드</th>
+                                    <th>전체순위</th>
+                                    <th>실순위</th>
+                                    <th>업데이트 시간</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+                                
+                day.keywords.forEach(kw => {
+                    const total = formatRank(kw.total_rank);
+                    const pure = formatRank(kw.pure_rank);
+                    const time = kw.time || '-';
+                    
+                    html += `<tr>
+                                <td style="color: #334155; font-weight: 500;">${kw.keyword}</td>
+                                <td class="rank-highlight">${total}</td>
+                                <td class="pure-highlight">${pure}</td>
+                                <td style="color: #64748b;">${time}</td>
+                              </tr>`;
+                });
+                html += `</tbody></table></div>`;
+            });
+            
+            modalBody.innerHTML = html;
+            document.getElementById('modalOverlay').style.display = 'flex';
+        }
+
+        function closeModal() { document.getElementById('modalOverlay').style.display = 'none'; }
+
+        // 7. 단일 검색 로직
+        function renderSearchSuccess(data, placeAlias, placeUrl) {
+            const isOut = data.status === 'out_of_top';
+            const vReviews = isOut ? '확인불가' : (data.visitor_reviews !== null ? data.visitor_reviews : '확인불가');
+            const bReviews = isOut ? '확인불가' : (data.blog_reviews !== null ? data.blog_reviews : '확인불가');
+            const totalRank = isOut ? '20위권 밖' : `${data.total_rank}위`;
+            const pureRank = isOut ? '20위권 밖' : `${data.pure_rank}위`;
+
+            return `
+                <div>플레이스: <span style="font-weight:600;">${data.name || placeAlias || placeUrl}</span></div>
+                <div>검색 키워드: <span style="font-weight:600;">${data.keyword || document.getElementById('keywordInput').value.trim()}</span></div>
+                <div style="margin-top:5px;">전체 순위: <span style="color:#e11d48; font-weight:600;">${totalRank}</span> / 실 순위: <span style="color:#0284c7; font-weight:600;">${pureRank}</span></div>
+                <div style="margin-top:5px;">방문자 리뷰: ${vReviews} / 블로그 리뷰: ${bReviews}</div>
+            `;
+        }
+
+        function renderNeedMore(data) {
+            return `<div style="color: #92400e; font-weight: 700;">20위권 밖입니다. 방문자 리뷰와 블로그 리뷰는 확인불가로 저장됩니다.</div>`;
+        }
+
+        async function searchRank() {
+            const keyword = document.getElementById('keywordInput').value.trim();
+            const placeUrl = document.getElementById('placeUrlInput').value.trim();
+            const placeAlias = document.getElementById('aliasInput').value.trim();
+            
+            if (!keyword || !placeUrl) {
+                alert('키워드와 플레이스 URL을 모두 입력해 주십시오.');
+                return;
+            }
+
+            const searchBtn = document.getElementById('searchBtn');
+            const loadingText = document.getElementById('loadingText');
+            const resultContent = document.getElementById('resultContent');
+            const resultBox = document.getElementById('resultBox');
+
+            searchBtn.disabled = true;
+            resultBox.style.display = 'block';
+            loadingText.style.display = 'block';
+            resultContent.innerHTML = '';
+
+            try {
+                const response = await fetch('/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        keyword: keyword,
+                        target_place_url: placeUrl,
+                        place_alias: placeAlias
+                    })
+                });
+
+                const data = await response.json();
+                loadingText.style.display = 'none';
+
+                if (data.status === 'success' || data.status === 'out_of_top') {
+                    resultContent.innerHTML = renderSearchSuccess(data, placeAlias, placeUrl);
+                    // 검색 성공 시 전체 데이터 리로드
+                    await fetchAndRenderPlaces();
+                } else {
+                    resultContent.innerHTML = `<div style="color: #e11d48; font-weight: 600;">순위 확인에 실패하였습니다.</div>`;
+                }
+            } catch (error) {
+                loadingText.style.display = 'none';
+                resultContent.innerHTML = `<div style="color: #e11d48; font-weight: 600;">서버 통신 에러가 발생하였습니다.</div>`;
+            } finally {
+                searchBtn.disabled = false;
+            }
+        }
+
+        async function searchMore(startRank, endRank) {
+            const keyword = document.getElementById('keywordInput').value.trim();
+            const placeUrl = document.getElementById('placeUrlInput').value.trim();
+            const placeAlias = document.getElementById('aliasInput').value.trim();
+            const resultContent = document.getElementById('resultContent');
+
+            resultContent.innerHTML = `<div style="color:#92400e; font-weight:700;">${startRank}-${endRank}위 추가검색 중입니다...</div>`;
+
+            try {
+                const response = await fetch('/search_more', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        keyword: keyword,
+                        target_place_url: placeUrl,
+                        place_alias: placeAlias,
+                        start_rank: startRank,
+                        end_rank: endRank
+                    })
+                });
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    resultContent.innerHTML = renderSearchSuccess(data, placeAlias, placeUrl);
+                    await fetchAndRenderPlaces();
+                } else if (data.status === 'need_more') {
+                    resultContent.innerHTML = renderNeedMore(data);
+                } else {
+                    resultContent.innerHTML = `<div style="color: #e11d48; font-weight: 600;">99위 안에서 해당 플레이스를 찾지 못했습니다.</div>`;
+                }
+            } catch (error) {
+                resultContent.innerHTML = `<div style="color: #e11d48; font-weight: 600;">서버 통신 에러가 발생하였습니다.</div>`;
+            }
+        }
+
+        function setRefreshButtons(disabled, label) {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const analysisRefreshBtn = document.getElementById('analysisRefreshBtn');
+            const placeRefreshButtons = document.querySelectorAll('.place-refresh-btn');
+            if (refreshBtn) {
+                refreshBtn.disabled = disabled;
+                refreshBtn.innerText = label;
+            }
+            if (analysisRefreshBtn) {
+                analysisRefreshBtn.disabled = disabled;
+                analysisRefreshBtn.innerText = label;
+            }
+            placeRefreshButtons.forEach(btn => {
+                btn.disabled = disabled;
+                btn.innerText = label;
+            });
+        }
+
+        function resetRefreshButtons() {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const analysisRefreshBtn = document.getElementById('analysisRefreshBtn');
+            const placeRefreshButtons = document.querySelectorAll('.place-refresh-btn');
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.innerText = "시스템 전체 순위 최신화";
+            }
+            if (analysisRefreshBtn) {
+                analysisRefreshBtn.disabled = false;
+                analysisRefreshBtn.innerText = "전체갱신";
+            }
+            placeRefreshButtons.forEach(btn => {
+                btn.disabled = false;
+                btn.innerText = "최신화";
+            });
+        }
+
+        function wait(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function pollRefreshStatus() {
+            while (true) {
+                await wait(3000);
+                const response = await fetch('/api/refresh_status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: currentUserId })
+                });
+                const data = await response.json();
+
+                if (data.status === 'running') {
+                    const current = data.current_keyword ? ` (${data.current_keyword})` : '';
+                    setRefreshButtons(true, `업데이트 중 ${data.done}/${data.total}${current}`);
+                    continue;
+                }
+
+                if (data.status === 'success') {
+                    alert(data.message);
+                    await fetchAndRenderPlaces();
+                    return;
+                }
+
+                if (data.status === 'error') {
+                    alert("오류: " + (data.message || "업데이트에 실패하였습니다."));
+                    return;
+                }
+
+                return;
+            }
+        }
+
+        // 8. 전체 최신화 로직
+        async function refreshAll() {
+            setRefreshButtons(true, "업데이트를 시작하고 있습니다...");
+
+            try {
+                const response = await fetch('/api/refresh_all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: currentUserId })
+                });
+                
+                const data = await response.json();
+                if (data.status === 'running') {
+                    const current = data.current_keyword ? ` (${data.current_keyword})` : '';
+                    setRefreshButtons(true, `업데이트 중 ${data.done}/${data.total}${current}`);
+                    await pollRefreshStatus();
+                } else {
+                    alert("오류: " + (data.message || "업데이트에 실패하였습니다."));
+                }
+            } catch (e) {
+                alert("서버 연결에 실패하였습니다.");
+            } finally {
+                resetRefreshButtons();
+            }
+        }
+
+        async function refreshPlace(encodedUrl) {
+            const targetUrl = decodeURIComponent(encodedUrl);
+            setRefreshButtons(true, "플레이스 최신화 중...");
+
+            try {
+                const response = await fetch('/api/refresh_place', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        target_place_url: targetUrl
+                    })
+                });
+
+                const data = await response.json();
+                if (data.status === 'running') {
+                    const current = data.current_keyword ? ` (${data.current_keyword})` : '';
+                    setRefreshButtons(true, `업데이트 중 ${data.done}/${data.total}${current}`);
+                    await pollRefreshStatus();
+                } else {
+                    alert("오류: " + (data.message || "업데이트에 실패하였습니다."));
+                }
+            } catch (e) {
+                alert("서버 연결에 실패하였습니다.");
+            } finally {
+                resetRefreshButtons();
+            }
+        }
+    </script>
 </body>
 </html>
