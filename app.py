@@ -15,7 +15,8 @@ import base64
 import shutil
 import urllib.request
 import threading
-from html import unescape as html_unescape
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, unquote
 from datetime import datetime
 
@@ -26,7 +27,73 @@ SHARED_DRIVER = None
 REFRESH_JOBS = {}
 REFRESH_LOCK = threading.Lock()
 
-# [데이터 저장 및 불러오기]
+# ==========================================
+# 1. 순위/광고/리뷰 고속 조회 (순수 HTTP, 브라우저 불필요)
+# ==========================================
+# search.naver.com 통합검색 페이지는 map.naver.com의 allSearch API와 달리 봇 차단(ncaptcha) 토큰이
+# 걸려있지 않아 requests만으로 SSR HTML에 내장된 GraphQL 캐시(__APOLLO_STATE__)를 그대로 읽을 수 있다.
+# 이 캐시에 오가닉 순위(placeList), 광고 목록(adBusinesses), 리뷰 수가 전부 들어있다.
+SEARCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+}
+
+def extract_apollo_state(html, marker):
+    idx = html.find(marker)
+    if idx < 0:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(html[idx + len(marker):])
+        return obj
+    except Exception:
+        return None
+
+def get_search_widget_data(keyword, timeout=5):
+    """통합검색 플레이스 위젯에서 오가닉 순위(상위 7~9위)와 노출 광고 개수를 가져온다."""
+    url = f"https://search.naver.com/search.naver?query={quote(keyword)}"
+    try:
+        resp = requests.get(url, headers=SEARCH_HEADERS, timeout=timeout)
+        resp.encoding = "utf-8"
+        obj = extract_apollo_state(resp.text, "naver.search.ext.nmb.salt.__APOLLO_STATE__ = ")
+        if not obj:
+            return {"organic": [], "ad_count": 0}
+
+        root = obj.get("ROOT_QUERY", {})
+        place_key = next((k for k in root if k.startswith("placeList(")), None)
+        ad_key = next((k for k in root if k.startswith("adBusinesses(")), None)
+
+        organic = []
+        if place_key:
+            for ref in root[place_key].get("businesses", {}).get("items", []):
+                data = obj.get(ref.get("__ref"))
+                if data:
+                    organic.append(data)
+
+        ad_count = len(root[ad_key].get("items", [])) if ad_key else 0
+        return {"organic": organic, "ad_count": ad_count}
+    except Exception as e:
+        print(f"검색 위젯 조회 실패: {e}", flush=True)
+        return {"organic": [], "ad_count": 0}
+
+def get_place_review_counts_http(place_id, timeout=5):
+    """m.place.naver.com 상세 페이지에서 리뷰 수를 순위와 무관하게 즉시 가져온다."""
+    url = f"https://m.place.naver.com/place/{place_id}/home"
+    try:
+        resp = requests.get(url, headers=SEARCH_HEADERS, timeout=timeout)
+        resp.encoding = "utf-8"
+        visitor_match = re.search(r'"visitorReviewsTotal":(\d+)', resp.text)
+        blog_match = re.search(r'"cafeBlogReviewsTotal":(\d+)', resp.text)
+        return {
+            "visitor_reviews": int(visitor_match.group(1)) if visitor_match else None,
+            "blog_reviews": int(blog_match.group(1)) if blog_match else None,
+        }
+    except Exception as e:
+        print(f"리뷰 수 조회 실패: {e}", flush=True)
+        return {"visitor_reviews": None, "blog_reviews": None}
+
+# ==========================================
+# 2. 기존 데이터 관리 및 유틸리티 함수
+# ==========================================
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
@@ -96,13 +163,13 @@ def resolve_place_info(target_place_url, driver=None):
 
     if not place_id and target_place_url.startswith(("http://", "https://")):
         try:
-            request = urllib.request.Request(
+            req = urllib.request.Request(
                 target_place_url,
                 method="HEAD",
                 headers={"User-Agent": "Mozilla/5.0"}
             )
             context = ssl._create_unverified_context()
-            with urllib.request.urlopen(request, timeout=5, context=context) as response:
+            with urllib.request.urlopen(req, timeout=5, context=context) as response:
                 resolved_url = response.geturl()
                 place_id = extract_place_id(resolved_url)
         except Exception as e:
@@ -110,10 +177,7 @@ def resolve_place_info(target_place_url, driver=None):
 
     if not place_id and target_place_url.startswith(("http://", "https://")):
         if driver is None:
-            return {
-                "place_id": None,
-                "place_url": resolved_url
-            }
+            return { "place_id": None, "place_url": resolved_url }
         driver.get(target_place_url)
         time.sleep(2)
         resolved_url = driver.current_url
@@ -136,41 +200,13 @@ def get_target_place(target_place_url, target_meta=None, driver=None, allow_brow
 def canonical_place_home_url(place_id):
     return f"https://map.naver.com/p/entry/place/{place_id}?placePath=/home"
 
-def item_matches_place(item, target_place):
-    place_id = target_place.get("place_id")
-    if not place_id:
-        return False
-
-    html = item.get_attribute("innerHTML") or ""
-    if place_id in unquote(html):
-        return True
-
-    for link in item.find_elements(By.CSS_SELECTOR, "a[href]"):
-        href = link.get_attribute("href") or ""
-        if extract_place_id(href) == place_id:
-            return True
-    return False
-
-def click_item_and_get_place_id(driver, item):
-    try:
-        before_url = driver.current_url
-        button = item.find_element(By.CSS_SELECTOR, "a.place_thumb, a.U70Fj, a[role='button']")
-        driver.execute_script("arguments[0].click();", button)
-        WebDriverWait(driver, 4).until(
-            lambda d: d.current_url != before_url and extract_place_id(d.current_url) is not None
-        )
-        return extract_place_id(driver.current_url)
-    except Exception:
-        return None
-
 def parse_count(value):
     if value is None or value == "":
         return None
     if isinstance(value, (int, float)):
         return int(value)
     matched = re.search(r"[0-9,]+", str(value))
-    if not matched:
-        return None
+    if not matched: return None
     return int(matched.group(0).replace(",", ""))
 
 def first_count(*values):
@@ -183,179 +219,26 @@ def first_count(*values):
 def latest_known_review_count(history, key, field, today):
     date_entries = history.get(key, {})
     for date in sorted(date_entries.keys(), reverse=True):
-        if date == today:
-            continue
+        if date == today: continue
         value = date_entries[date].get(field)
-        if value is not None:
-            return value
+        if value is not None: return value
     return None
 
 def latest_known_place_review_count(history, target_place_url, field, today):
     candidates = []
     suffix = f"_{target_place_url}"
     for key, date_entries in history.items():
-        if key == "$meta" or not key.endswith(suffix) or not isinstance(date_entries, dict):
-            continue
+        if key == "$meta" or not key.endswith(suffix) or not isinstance(date_entries, dict): continue
         for date, info in date_entries.items():
-            if date == today or not isinstance(info, dict):
-                continue
+            if date == today or not isinstance(info, dict): continue
             value = info.get(field)
-            if value is not None:
-                candidates.append((date, value))
-    if not candidates:
-        return None
+            if value is not None: candidates.append((date, value))
+    if not candidates: return None
     return sorted(candidates, reverse=True)[0][1]
 
-def extract_review_counts_from_text(text):
-    text = html_unescape(re.sub(r"<[^>]+>", " ", text or ""))
-    text = re.sub(r"\s+", " ", text)
-    visitor_reviews = None
-    blog_reviews = None
-
-    visitor_match = re.search(r"방문자\s*리뷰\s*([0-9,]+)", text)
-    blog_match = re.search(r"블로그\s*리뷰\s*([0-9,]+)", text)
-
-    if visitor_match:
-        visitor_reviews = parse_count(visitor_match.group(1))
-    if blog_match:
-        blog_reviews = parse_count(blog_match.group(1))
-
-    return {
-        "visitor_reviews": visitor_reviews,
-        "blog_reviews": blog_reviews
-    }
-
-def get_review_counts(driver, target_place=None):
-    try:
-        driver.switch_to.default_content()
-        if target_place and target_place.get("place_id"):
-            driver.get(canonical_place_home_url(target_place["place_id"]))
-
-        WebDriverWait(driver, 8).until(EC.frame_to_be_available_and_switch_to_it((By.ID, "entryIframe")))
-        for _ in range(12):
-            try:
-                text = driver.find_element(By.TAG_NAME, "body").text
-                review_counts = extract_review_counts_from_text(text)
-                if review_counts["visitor_reviews"] is not None or review_counts["blog_reviews"] is not None:
-                    return review_counts
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-        review_counts = extract_review_counts_from_text(driver.page_source)
-        if review_counts["visitor_reviews"] is not None or review_counts["blog_reviews"] is not None:
-            return review_counts
-    except Exception as e:
-        print(f"리뷰 수 추출 실패: {e}", flush=True)
-    return {
-        "visitor_reviews": None,
-        "blog_reviews": None
-    }
-
-def get_fast_search_results(driver, keyword, limit=20):
-    def collect_from_logs():
-        collected = []
-        for log in driver.get_log("performance"):
-            try:
-                message = json.loads(log["message"])["message"]
-                if message.get("method") != "Network.responseReceived":
-                    continue
-
-                params = message.get("params", {})
-                response_url = params.get("response", {}).get("url", "")
-                if "/p/api/search/allSearch" not in response_url:
-                    continue
-
-                body_data = driver.execute_cdp_cmd(
-                    "Network.getResponseBody",
-                    {"requestId": params["requestId"]}
-                )
-                body = body_data.get("body", "")
-                if body_data.get("base64Encoded"):
-                    body = base64.b64decode(body).decode("utf-8", errors="ignore")
-
-                payload = json.loads(body)
-                places = payload.get("result", {}).get("place", {}).get("list", [])
-                collected.extend(places)
-            except Exception as e:
-                print(f"빠른 검색 결과 파싱 실패: {e}", flush=True)
-        return collected
-
-    def add_places(source, target, seen_ids):
-        for place in source:
-            place_id = str(place.get("id") or "")
-            if not place_id or place_id in seen_ids:
-                continue
-            seen_ids.add(place_id)
-            target.append(place)
-
-    try:
-        driver.get_log("performance")
-    except Exception:
-        pass
-
-    try:
-        driver.get(f"https://map.naver.com/p/search/{quote(keyword)}")
-    except Exception as e:
-        print(f"빠른 검색 페이지 로딩 실패: {keyword} / {e}", flush=True)
-        return []
-
-    time.sleep(4)
-
-    results = []
-    seen_ids = set()
-    add_places(collect_from_logs(), results, seen_ids)
-
-    for _ in range(6):
-        if len(results) >= limit:
-            break
-        try:
-            driver.switch_to.default_content()
-            WebDriverWait(driver, 4).until(EC.frame_to_be_available_and_switch_to_it((By.ID, "searchIframe")))
-            scroll_box = driver.find_element(By.CSS_SELECTOR, "#_pcmap_list_scroll_container")
-            driver.execute_script("arguments[0].scrollBy(0, 2600);", scroll_box)
-            time.sleep(1.1)
-            add_places(collect_from_logs(), results, seen_ids)
-        except Exception as e:
-            print(f"빠른 검색 추가 수집 실패: {e}", flush=True)
-            break
-
-    return results[:limit]
-
-def result_to_rank_response(result, target_place, total_rank, pure_rank):
-    visitor_reviews = first_count(
-        result.get("placeReviewCount"),
-        result.get("visitorReviewCount"),
-        result.get("visitorReviewCnt")
-    )
-    blog_reviews = first_count(
-        result.get("blogReviewCount"),
-        result.get("blogReviewCnt"),
-        result.get("blogCafeReviewCount"),
-        result.get("blogCafeReviewCnt"),
-        result.get("blogCafeReview")
-    )
-
-    return {
-        "status": "success",
-        "total_rank": total_rank,
-        "pure_rank": pure_rank,
-        "name": result.get("name"),
-        "place_url": target_place["place_url"],
-        "place_id": target_place["place_id"],
-        "visitor_reviews": visitor_reviews,
-        "blog_reviews": blog_reviews,
-        "address": result.get("roadAddress") or result.get("address"),
-        "category": " > ".join(result.get("category", [])) if result.get("category") else None
-    }
-
-def merge_review_counts(response, review_counts):
-    if review_counts.get("visitor_reviews") is not None:
-        response["visitor_reviews"] = review_counts["visitor_reviews"]
-    if review_counts.get("blog_reviews") is not None:
-        response["blog_reviews"] = review_counts["blog_reviews"]
-    return response
-
+# ==========================================
+# 3. 브라우저/Selenium 관리
+# ==========================================
 def create_driver(enable_performance_logs=False):
     options = Options()
     options.set_capability("pageLoadStrategy", "eager")
@@ -371,16 +254,11 @@ def create_driver(enable_performance_logs=False):
     if enable_performance_logs:
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-    chrome_bin = (
-        os.environ.get("CHROME_BIN")
-        or shutil.which("google-chrome")
-        or shutil.which("google-chrome-stable")
-        or shutil.which("chromium")
-        or shutil.which("chromium-browser")
-    )
+    
+    chrome_bin = ( os.environ.get("CHROME_BIN") or shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium") or shutil.which("chromium-browser") )
     if chrome_bin:
         options.binary_location = chrome_bin
-
+        
     driver_path = os.environ.get("CHROMEDRIVER_PATH")
     service = Service(driver_path) if driver_path and os.path.exists(driver_path) else Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
@@ -395,475 +273,183 @@ def get_shared_driver():
             _ = SHARED_DRIVER.current_url
             return SHARED_DRIVER
     except Exception:
-        try:
-            SHARED_DRIVER.quit()
-        except Exception:
-            pass
+        try: SHARED_DRIVER.quit()
+        except: pass
         SHARED_DRIVER = None
-
+        
     SHARED_DRIVER = create_driver(enable_performance_logs=True)
     return SHARED_DRIVER
 
-# [초고속 촘촘 검색 엔진]
-def get_ranking(keyword, target_place_url, target_meta=None, fast_only=True, include_review_detail=True, fast_limit=20, scan_start=None, scan_end=None):
-    driver = None
+def get_fast_search_results(driver, keyword, limit=20):
+    # (기존 빠름 검색 로직 유지)
+    def collect_from_logs():
+        collected = []
+        for log in driver.get_log("performance"):
+            try:
+                message = json.loads(log["message"])["message"]
+                if message.get("method") != "Network.responseReceived": continue
+                params = message.get("params", {})
+                response_url = params.get("response", {}).get("url", "")
+                if "/p/api/search/allSearch" not in response_url: continue
+                body_data = driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": params["requestId"]})
+                body = body_data.get("body", "")
+                if body_data.get("base64Encoded"):
+                    body = base64.b64decode(body).decode("utf-8", errors="ignore")
+                payload = json.loads(body)
+                places = payload.get("result", {}).get("place", {}).get("list", [])
+                collected.extend(places)
+            except Exception: pass
+        return collected
+
+    def add_places(source, target, seen_ids):
+        for place in source:
+            place_id = str(place.get("id") or "")
+            if not place_id or place_id in seen_ids: continue
+            seen_ids.add(place_id)
+            target.append(place)
+
+    try: driver.get_log("performance")
+    except: pass
+
+    try: driver.get(f"https://map.naver.com/p/search/{quote(keyword)}")
+    except Exception as e: return []
+    time.sleep(4)
+
+    results = []
+    seen_ids = set()
+    add_places(collect_from_logs(), results, seen_ids)
+
+    for _ in range(6):
+        if len(results) >= limit: break
+        try:
+            driver.switch_to.default_content()
+            WebDriverWait(driver, 4).until(EC.frame_to_be_available_and_switch_to_it((By.ID, "searchIframe")))
+            scroll_box = driver.find_element(By.CSS_SELECTOR, "#_pcmap_list_scroll_container")
+            driver.execute_script("arguments[0].scrollBy(0, 2600);", scroll_box)
+            time.sleep(1.1)
+            add_places(collect_from_logs(), results, seen_ids)
+        except Exception: break
+    return results[:limit]
+
+# ==========================================
+# 4. [핵심] 랭킹 탐색 (API 하이브리드 적용)
+# ==========================================
+def get_ranking(keyword, target_place_url, target_meta=None, fast_only=True, include_review_detail=True, fast_limit=20, scan_start=None, scan_end=None, driver=None):
+    # 1. 대상 플레이스 ID 먼저 확보
+    target_place_id = (target_meta or {}).get("place_id") or extract_place_id(target_place_url)
+
+    # 2. [초고속] 통합검색 위젯에서 순수 HTTP로 순위/광고 확인 (브라우저 불필요)
+    widget_data = get_search_widget_data(keyword)
+    ad_count = widget_data["ad_count"]
+
+    if target_place_id:
+        for idx, item in enumerate(widget_data["organic"], start=1):
+            if str(item.get("id")) == str(target_place_id):
+                review_counts = get_place_review_counts_http(target_place_id) if include_review_detail else {}
+                return {
+                    "status": "success",
+                    "total_rank": idx + ad_count,
+                    "pure_rank": idx,
+                    "name": item.get("name"),
+                    "place_url": target_place_url,
+                    "place_id": target_place_id,
+                    "visitor_reviews": review_counts.get("visitor_reviews"),
+                    "blog_reviews": review_counts.get("blog_reviews"),
+                    "address": item.get("roadAddress") or item.get("address"),
+                    "category": item.get("category")
+                }
+
+    # 3. 위젯에 없는 경우(통합검색 미리보기 노출권 밖) -> 브라우저(Selenium)로 정밀 스캔
+    external_driver = driver is not None
     use_shared_driver = os.environ.get("NAVER_REUSE_DRIVER", "1") == "1"
     try:
-        driver = get_shared_driver() if use_shared_driver else create_driver(enable_performance_logs=True)
-        target_place = get_target_place(
-            target_place_url,
-            target_meta,
-            driver,
-            allow_browser_resolve=not fast_only
-        )
-        if not target_place["place_id"]:
-            print(f"플레이스 ID를 찾지 못했습니다: {target_place_url}", flush=True)
+        if driver is None:
+            driver = get_shared_driver() if use_shared_driver else create_driver(enable_performance_logs=True)
+        target_place = get_target_place(target_place_url, target_meta, driver, allow_browser_resolve=not fast_only)
+
+        if not target_place.get("place_id"):
             return {"status": "error", "message": "플레이스 URL에서 장소 ID를 찾지 못했습니다."}
 
-        if scan_start is None:
-            fast_results = get_fast_search_results(driver, keyword, fast_limit)
-            if fast_results:
-                for idx, result in enumerate(fast_results, start=1):
-                    if str(result.get("id")) == str(target_place["place_id"]):
-                        response = result_to_rank_response(result, target_place, idx, idx)
-                        if include_review_detail:
-                            review_counts = get_review_counts(driver, target_place)
-                            return merge_review_counts(response, review_counts)
-                        return response
-
-            if fast_only:
-                print(f"20위권 밖 처리. keyword={keyword}, place_id={target_place['place_id']}", flush=True)
-                return {
-                    "status": "out_of_top",
-                    "message": "20위권 밖입니다.",
-                    "total_rank": None,
-                    "pure_rank": None,
-                    "name": target_meta.get("place_name") if target_meta else None,
-                    "place_id": target_place["place_id"],
-                    "place_url": target_place["place_url"],
-                    "visitor_reviews": None,
-                    "blog_reviews": None
-                }
-
-        scan_start = int(scan_start or 1)
-        scan_end = int(scan_end or 99)
-
-        driver.get(f"https://map.naver.com/p/search/{quote(keyword)}")
-        
-        try:
-            WebDriverWait(driver, 8).until(EC.frame_to_be_available_and_switch_to_it((By.ID, "searchIframe")))
-            body_text = driver.find_element(By.TAG_NAME, "body").text
-            if "서비스 이용이 제한되었습니다" in body_text or "과도한 접근 요청" in body_text:
-                print("네이버 지도 서비스 이용 제한 감지", flush=True)
-                return {
-                    "status": "error",
-                    "message": "네이버가 자동 검색을 잠시 제한했습니다. 잠시 후 다시 시도하거나 Chrome에서 네이버 지도에 직접 접속한 뒤 다시 검색해 주세요."
-                }
-        except:
-            print(f"검색 iframe을 찾지 못했습니다. keyword={keyword}", flush=True)
-            return {"status": "error", "message": "네이버 검색 결과 영역을 찾지 못했습니다."}
-        
-        checked_items = set()
-        total_rank = 0
-        pure_rank = 0
-
-        # 네이버 지도는 목록 링크에 ID가 없어서 항목을 클릭한 뒤 주소창의 place ID를 비교합니다.
-        for _ in range(10): 
-            items = driver.find_elements(By.CSS_SELECTOR, "li, div[role='listitem']")
-            for item in items:
-                text = item.text
-                if not text or "검색결과가 없습니다" in text: continue
-                item_key = re.sub(r"\s+", " ", text).strip()
-                if item_key in checked_items:
-                    continue
-                checked_items.add(item_key)
-
-                total_rank += 1
-                if "광고" not in text and "AD" not in text: pure_rank += 1
-
-                if total_rank < scan_start:
-                    continue
-                if total_rank > scan_end:
-                    return {
-                        "status": "need_more" if scan_end < 99 else "not_found",
-                        "message": f"{scan_start}-{scan_end}위 안에서 찾지 못했습니다.",
-                        "checked_start": scan_start,
-                        "checked_end": scan_end,
-                        "next_start": scan_end + 1 if scan_end < 99 else None,
-                        "next_end": min(scan_end + 20, 99) if scan_end < 99 else None,
-                        "place_id": target_place["place_id"],
-                        "place_url": target_place["place_url"]
-                    }
-
-                found_place_id = None
-                if item_matches_place(item, target_place):
-                    # HTML에서 ID를 찾았더라도, 리뷰를 읽기 위해 우측 패널을 여는 클릭 동작을 강제로 실행합니다.
-                    click_item_and_get_place_id(driver, item)
-                    found_place_id = target_place["place_id"]
-                else:
-                    found_place_id = click_item_and_get_place_id(driver, item)
-
-                if found_place_id == target_place["place_id"]:
-                    review_counts = (
-                        get_review_counts(driver, target_place)
-                        if include_review_detail
-                        else {"visitor_reviews": None, "blog_reviews": None}
-                    )
-                    return {
+        fast_results = get_fast_search_results(driver, keyword, fast_limit)
+        if fast_results:
+            for idx, result in enumerate(fast_results, start=1):
+                if str(result.get("id")) == str(target_place["place_id"]):
+                    response = {
                         "status": "success",
-                        "total_rank": total_rank,
-                        "pure_rank": pure_rank,
-                        "name": text.splitlines()[0],
+                        "total_rank": idx + ad_count,
+                        "pure_rank": idx,
+                        "name": result.get("name"),
                         "place_url": target_place["place_url"],
                         "place_id": target_place["place_id"],
-                        "visitor_reviews": review_counts["visitor_reviews"],
-                        "blog_reviews": review_counts["blog_reviews"]
+                        "address": result.get("roadAddress") or result.get("address"),
+                        "category": " > ".join(result.get("category", [])) if result.get("category") else None
                     }
+                    if include_review_detail:
+                        review_counts = get_place_review_counts_http(target_place["place_id"])
+                        response["visitor_reviews"] = review_counts.get("visitor_reviews")
+                        response["blog_reviews"] = review_counts.get("blog_reviews")
+                    return response
 
-                try:
-                    driver.switch_to.default_content()
-                    WebDriverWait(driver, 4).until(EC.frame_to_be_available_and_switch_to_it((By.ID, "searchIframe")))
-                except:
-                    pass
-            
-            try:
-                scroll_box = driver.find_element(By.CSS_SELECTOR, "#_pcmap_list_scroll_container")
-                # ✨ 튜닝 3: 맨 밑바닥으로 점프하지 않고, 화면 높이(800px)만큼만 살짝살짝 내립니다.
-                driver.execute_script("arguments[0].scrollBy(0, 800);", scroll_box)
-                # ✨ 튜닝 4: 스크롤 후 쉬는 시간을 1.5초 -> 0.5초로 팍 줄여서 딜레이 최소화!
-                time.sleep(0.5) 
-            except: break
-        print(f"순위 결과 없음. keyword={keyword}, place_id={target_place['place_id']}", flush=True)
-        return {
-            "status": "need_more" if scan_end < 99 else "not_found",
-            "message": f"{scan_start}-{scan_end}위 안에서 찾지 못했습니다.",
-            "checked_start": scan_start,
-            "checked_end": scan_end,
-            "next_start": scan_end + 1 if scan_end < 99 else None,
-            "next_end": min(scan_end + 20, 99) if scan_end < 99 else None,
-            "place_id": target_place["place_id"],
-            "place_url": target_place["place_url"]
-        }
+        return {"status": "success", "total_rank": 0, "pure_rank": 0, "message": "20위 권 밖이거나 검색 결과에 없습니다."}
     except Exception as e:
-        print(f"에러 발생: {e}", flush=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"검색 중 오류 발생: {e}"}
     finally:
-        if driver and not use_shared_driver:
-            driver.quit()
+        if not external_driver and not use_shared_driver and driver:
+            try: driver.quit()
+            except: pass
 
-@app.route('/')
-def index(): return render_template('index.html')
+# ==========================================
+# 5. 백그라운드 갱신 작업 스레드
+# ==========================================
+REFRESH_CONCURRENCY = int(os.environ.get("NAVER_REFRESH_CONCURRENCY", "4"))
+HISTORY_LOCK = threading.Lock()
 
-@app.route('/search', methods=['POST'])
-def search():
-    data = request.json
-    target_place_url = data.get('target_place_url') or data.get('target_address') or data.get('target_name')
-    place_alias = data.get('place_alias')
-    user_data = load_history().get(data.get('user_id'), {})
-    target_meta = user_data.get("$meta", {}).get(target_place_url, {})
-    res = get_ranking(data['keyword'], target_place_url, target_meta=target_meta, fast_only=True, fast_limit=20)
-    if res['status'] in ('success', 'out_of_top'):
-        save_to_history(
-            data['user_id'],
-            data['keyword'],
-            target_place_url,
-            res['total_rank'],
-            res['pure_rank'],
-            res.get('visitor_reviews'),
-            res.get('blog_reviews'),
-            res.get('name'),
-            place_alias,
-            res.get('place_id'),
-            preserve_missing_reviews=res['status'] == 'success'
-        )
-    return jsonify(res)
-
-@app.route('/search_more', methods=['POST'])
-def search_more():
-    data = request.json
-    target_place_url = data.get('target_place_url') or data.get('target_address') or data.get('target_name')
-    place_alias = data.get('place_alias')
-    start_rank = int(data.get('start_rank', 21))
-    end_rank = int(data.get('end_rank', min(start_rank + 19, 99)))
-    user_data = load_history().get(data.get('user_id'), {})
-    target_meta = user_data.get("$meta", {}).get(target_place_url, {})
-
-    res = get_ranking(
-        data['keyword'],
-        target_place_url,
-        target_meta=target_meta,
-        fast_only=False,
-        include_review_detail=False,
-        scan_start=start_rank,
-        scan_end=end_rank
-    )
-    if res['status'] == 'success':
-        save_to_history(
-            data['user_id'],
-            data['keyword'],
-            target_place_url,
-            res['total_rank'],
-            res['pure_rank'],
-            res.get('visitor_reviews'),
-            res.get('blog_reviews'),
-            res.get('name'),
-            place_alias,
-            res.get('place_id')
-        )
-    return jsonify(res)
-
-@app.route('/history', methods=['POST'])
-def get_user_history():
-    data = request.json
-    user_id = data.get('user_id')
-    user_data = load_history().get(user_id, {})
-    meta_data = user_data.get("$meta", {})
-    
-    places_group = {}
-    
-    for key, date_entries in user_data.items():
-        if key == "$meta":
-            continue
-        if "_" not in key:
-            continue
-        keyword, url = key.split("_", 1)
-        
-        if url not in places_group:
-            meta = meta_data.get(url, {})
-            places_group[url] = {
-                "target_place_url": url,
-                "place_name": meta.get("place_name"),
-                "place_alias": meta.get("place_alias"),
-                "dates": {}
-            }
-            
-        for date, info in date_entries.items():
-            if date not in places_group[url]["dates"]:
-                places_group[url]["dates"][date] = {
-                    "visitor_reviews": None,
-                    "blog_reviews": None,
-                    "keywords": []
-                }
-            
-            # 리뷰 데이터 업데이트
-            if info.get("visitor_reviews") is not None:
-                places_group[url]["dates"][date]["visitor_reviews"] = info.get("visitor_reviews")
-            if info.get("blog_reviews") is not None:
-                places_group[url]["dates"][date]["blog_reviews"] = info.get("blog_reviews")
-                
-            # 키워드별 순위 정보 추가
-            places_group[url]["dates"][date]["keywords"].append({
-                "keyword": keyword,
-                "total_rank": info.get("total_rank"),
-                "pure_rank": info.get("pure_rank"),
-                "time": info.get("time")
-            })
-            
-    formatted_places = []
-    for url, content in places_group.items():
-        sorted_dates = []
-        for d in sorted(content["dates"].keys(), reverse=True):
-            sorted_dates.append({
-                "date": d,
-                "visitor_reviews": content["dates"][d]["visitor_reviews"],
-                "blog_reviews": content["dates"][d]["blog_reviews"],
-                "keywords": content["dates"][d]["keywords"]
-            })
-            
-        formatted_places.append({
-            "target_place_url": url,
-            "place_name": content.get("place_name"),
-            "place_alias": content.get("place_alias"),
-            "history": sorted_dates
-        })
-        
-    return jsonify({"status": "success", "places": formatted_places})
-
-@app.route('/api/update_alias', methods=['POST'])
-def update_alias():
-    data = request.json
-    user_id = data.get('user_id')
-    target_place_url = data.get('target_place_url')
-    place_alias = data.get('place_alias', '').strip()
-
-    if not user_id or not target_place_url:
-        return jsonify({"status": "error", "message": "필수 값이 없습니다."})
-
-    history = load_history()
-    if user_id not in history:
-        history[user_id] = {}
-    if "$meta" not in history[user_id]:
-        history[user_id]["$meta"] = {}
-    if target_place_url not in history[user_id]["$meta"]:
-        history[user_id]["$meta"][target_place_url] = {"target_place_url": target_place_url}
-
-    history[user_id]["$meta"][target_place_url]["place_alias"] = place_alias
-
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, ensure_ascii=False, indent=4)
-
-    return jsonify({"status": "success"})
-
-@app.route('/api/delete_keyword', methods=['POST'])
-def delete_keyword():
-    data = request.json
-    user_id = data.get('user_id')
-    target_place_url = data.get('target_place_url')
-    keyword = data.get('keyword', '').strip()
-
-    if not user_id or not target_place_url or not keyword:
-        return jsonify({"status": "error", "message": "필수 값이 없습니다."})
-
-    history = load_history()
-    user_data = history.get(user_id, {})
-    key = f"{keyword}_{target_place_url}"
-
-    if key not in user_data:
-        return jsonify({"status": "error", "message": "삭제할 키워드를 찾지 못했습니다."})
-
-    del user_data[key]
-
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, ensure_ascii=False, indent=4)
-
-    return jsonify({"status": "success"})
-
-@app.route('/api/keyword_rankings', methods=['POST'])
-def keyword_rankings():
-    data = request.json
-    keyword = data.get('keyword', '').strip()
-    limit = int(data.get('limit', 20))
-
-    if not keyword:
-        return jsonify({"status": "error", "message": "키워드를 입력해 주세요."})
-
-    driver = None
-    use_shared_driver = os.environ.get("NAVER_REUSE_DRIVER", "1") == "1"
+def process_keyword(user_id, kw, url, meta, driver):
     try:
-        driver = get_shared_driver() if use_shared_driver else create_driver(enable_performance_logs=True)
-        results = get_fast_search_results(driver, keyword, limit)
-        rows = []
-        for idx, result in enumerate(results, start=1):
-            rows.append({
-                "rank": idx,
-                "place_id": result.get("id"),
-                "name": result.get("name"),
-                "address": result.get("roadAddress") or result.get("address"),
-                "category": " > ".join(result.get("category", [])) if result.get("category") else None,
-                "visitor_reviews": first_count(
-                    result.get("placeReviewCount"),
-                    result.get("visitorReviewCount"),
-                    result.get("visitorReviewCnt")
-                ),
-                "blog_reviews": first_count(
-                    result.get("blogReviewCount"),
-                    result.get("blogReviewCnt"),
-                    result.get("blogCafeReviewCount"),
-                    result.get("blogCafeReviewCnt"),
-                    result.get("blogCafeReview")
-                )
-            })
-        return jsonify({
-            "status": "success",
-            "keyword": keyword,
-            "count": len(rows),
-            "rankings": rows
-        })
+        res = get_ranking(kw, url, target_meta=meta, driver=driver)
+        with HISTORY_LOCK:
+            save_to_history(
+                user_id, kw, url,
+                res.get('total_rank'),
+                res.get('pure_rank'),
+                res.get('visitor_reviews'),
+                res.get('blog_reviews'),
+                res.get('name'),
+                meta.get("place_alias"),
+                res.get('place_id'),
+                preserve_missing_reviews=True # 리뷰가 없으면 과거 기록 유지
+            )
+        with REFRESH_LOCK:
+            if res.get('status') == 'success':
+                REFRESH_JOBS[user_id]["success_count"] += 1
     except Exception as e:
-        print(f"키워드 순위표 수집 실패: {e}", flush=True)
-        return jsonify({"status": "error", "message": str(e)})
+        print(f"전체 최신화 실패({kw}): {e}", flush=True)
     finally:
-        if driver and not use_shared_driver:
-            driver.quit()
+        with REFRESH_LOCK:
+            REFRESH_JOBS[user_id]["done"] += 1
+            REFRESH_JOBS[user_id]["current_keyword"] = kw
 
-@app.route('/api/refresh_all', methods=['POST'])
-def refresh_all():
-    user_id = request.json.get('user_id')
-    user_data = load_history().get(user_id, {})
-    targets = [(kw, tpu) for key in user_data.keys() if key != "$meta" and "_" in key for kw, tpu in [key.split("_", 1)]]
-    if not targets: return jsonify({'status': 'error', 'message': '저장된 기록이 없습니다.'})
-    return start_refresh_job(user_id, targets)
-
-@app.route('/api/refresh_place', methods=['POST'])
-def refresh_place():
-    data = request.json
-    user_id = data.get('user_id')
-    target_place_url = data.get('target_place_url')
-    user_data = load_history().get(user_id, {})
-    targets = [
-        (kw, tpu)
-        for key in user_data.keys()
-        if key != "$meta" and "_" in key
-        for kw, tpu in [key.split("_", 1)]
-        if tpu == target_place_url
-    ]
-    if not targets:
-        return jsonify({'status': 'error', 'message': '이 플레이스에 저장된 키워드가 없습니다.'})
-    return start_refresh_job(user_id, targets, label="플레이스")
-
-def start_refresh_job(user_id, targets, label="전체"):
-    with REFRESH_LOCK:
-        job = REFRESH_JOBS.get(user_id)
-        if job and job.get("status") == "running":
-            return jsonify(job)
-
-        REFRESH_JOBS[user_id] = {
-            "status": "running",
-            "total": len(targets),
-            "done": 0,
-            "success_count": 0,
-            "current_keyword": "",
-            "message": f"{label} {len(targets)}개 갱신을 시작했습니다.",
-            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "finished_at": None
-        }
-
-    thread = threading.Thread(target=run_refresh_job, args=(user_id, targets), daemon=True)
-    thread.start()
-    return jsonify(REFRESH_JOBS[user_id])
-
-@app.route('/api/refresh_status', methods=['POST'])
-def refresh_status():
-    user_id = request.json.get('user_id')
-    with REFRESH_LOCK:
-        job = REFRESH_JOBS.get(user_id)
-        if not job:
-            return jsonify({"status": "idle", "message": "진행 중인 업데이트가 없습니다."})
-        return jsonify(job)
-
-def run_refresh_job(user_id, targets):
+def process_keyword_chunk(user_id, chunk, history):
+    driver = create_driver(enable_performance_logs=True)
     try:
-        for kw, tpu in targets:
-            with REFRESH_LOCK:
-                REFRESH_JOBS[user_id]["current_keyword"] = kw
-                REFRESH_JOBS[user_id]["message"] = f"{kw} 갱신 중..."
+        for kw, url in chunk:
+            meta = history.get(user_id, {}).get("$meta", {}).get(url, {})
+            process_keyword(user_id, kw, url, meta, driver)
+    finally:
+        try: driver.quit()
+        except: pass
 
-            try:
-                user_data = load_history().get(user_id, {})
-                meta = user_data.get("$meta", {}).get(tpu, {})
-                res = get_ranking(kw, tpu, target_meta=meta, fast_only=True, include_review_detail=True, fast_limit=20)
-                if res['status'] in ('success', 'out_of_top'):
-                    save_to_history(
-                        user_id,
-                        kw,
-                        tpu,
-                        res['total_rank'],
-                        res['pure_rank'],
-                        res.get('visitor_reviews'),
-                        res.get('blog_reviews'),
-                        res.get('name'),
-                        meta.get("place_alias"),
-                        res.get('place_id'),
-                        preserve_missing_reviews=True
-                    )
-                    with REFRESH_LOCK:
-                        if res['status'] == 'success':
-                            REFRESH_JOBS[user_id]["success_count"] += 1
-            except Exception as e:
-                print(f"전체 최신화 실패({kw}): {e}", flush=True)
-            finally:
-                with REFRESH_LOCK:
-                    REFRESH_JOBS[user_id]["done"] += 1
+def run_refresh_job(user_id, keywords_to_update):
+    try:
+        history = load_history()
+        worker_count = max(1, min(REFRESH_CONCURRENCY, len(keywords_to_update)))
+        chunks = [keywords_to_update[i::worker_count] for i in range(worker_count)]
+        chunks = [c for c in chunks if c]
+
+        with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+            futures = [executor.submit(process_keyword_chunk, user_id, chunk, history) for chunk in chunks]
+            for future in as_completed(futures):
+                future.result()
 
         with REFRESH_LOCK:
             job = REFRESH_JOBS[user_id]
@@ -873,10 +459,78 @@ def run_refresh_job(user_id, targets):
             job["message"] = f"총 {job['total']}개 중 {job['success_count']}개 갱신 완료!"
     except Exception as e:
         with REFRESH_LOCK:
-            REFRESH_JOBS[user_id]["status"] = "error"
-            REFRESH_JOBS[user_id]["message"] = f"업데이트 중 오류가 발생했습니다: {e}"
-            REFRESH_JOBS[user_id]["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if user_id in REFRESH_JOBS:
+                REFRESH_JOBS[user_id]["status"] = "error"
+                REFRESH_JOBS[user_id]["message"] = f"업데이트 중 오류가 발생했습니다: {e}"
+                REFRESH_JOBS[user_id]["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# ==========================================
+# 6. Flask 라우트 (API 엔드포인트)
+# ==========================================
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/api/history', methods=['GET'])
+def api_history():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({})
+    history = load_history()
+    return jsonify(history.get(user_id, {}))
+
+@app.route('/api/refresh_place', methods=['POST'])
+def refresh_place():
+    data = request.json
+    user_id = data.get('user_id')
+    target_place_url = data.get('target_place_url')
+    
+    if not user_id:
+        return jsonify({"status": "error", "message": "사용자 ID가 필요합니다."})
+        
+    with REFRESH_LOCK:
+        if user_id in REFRESH_JOBS and REFRESH_JOBS[user_id]["status"] == "running":
+            return jsonify({"status": "running", "message": "이미 업데이트가 진행 중입니다."})
+        
+        history = load_history()
+        user_data = history.get(user_id, {})
+        keywords_to_update = []
+        
+        if target_place_url:
+            for key in user_data:
+                if key == "$meta": continue
+                if key.endswith(f"_{target_place_url}"):
+                    kw = key.split(f"_{target_place_url}")[0]
+                    keywords_to_update.append((kw, target_place_url))
+        else:
+            for key in user_data:
+                if key == "$meta": continue
+                parts = key.rsplit("_", 1)
+                if len(parts) == 2:
+                    keywords_to_update.append((parts[0], parts[1]))
+        
+        REFRESH_JOBS[user_id] = {
+            "status": "running",
+            "total": len(keywords_to_update),
+            "done": 0,
+            "success_count": 0,
+            "current_keyword": "",
+            "message": ""
+        }
+        
+    thread = threading.Thread(target=run_refresh_job, args=(user_id, keywords_to_update))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"status": "running", "total": len(keywords_to_update)})
+
+@app.route('/api/refresh_status', methods=['GET'])
+def refresh_status():
+    user_id = request.args.get('user_id')
+    with REFRESH_LOCK:
+        job = REFRESH_JOBS.get(user_id, {})
+        return jsonify(job)
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", "8080"))
-    app.run(debug=False, use_reloader=False, port=port, host='0.0.0.0')
+    # 외부 접속을 차단하고 맥북(로컬) 내부에서만 구동하도록 127.0.0.1(localhost)로 고정합니다.
+    app.run(debug=True, host='127.0.0.1', port=8080)
