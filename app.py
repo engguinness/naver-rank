@@ -725,8 +725,9 @@ def refresh_place():
     thread = threading.Thread(target=run_refresh_job, args=(user_id, keywords_to_update))
     thread.daemon = True
     thread.start()
-    
-    return jsonify({"status": "running", "total": len(keywords_to_update)})
+
+    with REFRESH_LOCK:
+        return jsonify(REFRESH_JOBS[user_id])
 
 app.add_url_rule('/api/refresh_all', view_func=refresh_place, methods=['POST'])
 
