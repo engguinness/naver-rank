@@ -767,7 +767,7 @@ def auto_refresh_toggle():
 
 @app.route('/api/run_scheduled_refresh', methods=['POST'])
 def run_scheduled_refresh():
-    """매일 밤 10시 cron이 호출. $settings.auto_refresh가 켜진 사용자만 전체 갱신을 시작한다."""
+    """매일 오전 8시 cron이 호출. $settings.auto_refresh가 켜진 사용자만 전체 갱신을 시작한다."""
     history = load_history()
     started = []
 
