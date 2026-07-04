@@ -576,6 +576,19 @@
                     </div>
 
                     <div class="panel">
+                        <h3 class="panel-title">🌙 밤 10시 자동 갱신</h3>
+                        <div style="display:flex; align-items:center; justify-content:space-between; max-width: 420px;">
+                            <span style="color: var(--ink-soft); font-size: 14px; line-height: 1.6;">
+                                켜두면 매일 밤 10시에 등록된 모든 플레이스와 키워드의 순위·리뷰 데이터를 자동으로 최신화합니다.
+                            </span>
+                            <label class="switch" style="flex-shrink:0; margin-left: 16px;">
+                                <input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="panel">
                         <h3 class="panel-title">👋 이용 안내</h3>
                         <p style="color: var(--ink-soft); line-height: 1.8; font-size: 14px;">
                             왼쪽 메뉴에서 원하시는 기능을 선택해 주세요.<br>
@@ -678,6 +691,37 @@
             document.getElementById('sidebarUserMsg').innerText = `ID: ${currentUserId}`;
             
             await fetchAndRenderPlaces();
+            await fetchAutoRefreshStatus();
+        }
+
+        // 1-1. 자동 갱신 토글 상태 조회/변경
+        async function fetchAutoRefreshStatus() {
+            try {
+                const response = await fetch(`/api/auto_refresh_status?user_id=${encodeURIComponent(currentUserId)}`);
+                const data = await response.json();
+                document.getElementById('autoRefreshToggle').checked = !!data.enabled;
+            } catch (e) {
+                console.error('자동 갱신 상태 조회 실패:', e);
+            }
+        }
+
+        async function toggleAutoRefresh() {
+            const enabled = document.getElementById('autoRefreshToggle').checked;
+            try {
+                const response = await fetch('/api/auto_refresh_toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: currentUserId, enabled })
+                });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    alert('자동 갱신 설정 변경에 실패했습니다.');
+                    document.getElementById('autoRefreshToggle').checked = !enabled;
+                }
+            } catch (e) {
+                console.error('자동 갱신 설정 변경 실패:', e);
+                document.getElementById('autoRefreshToggle').checked = !enabled;
+            }
         }
 
         // 2. 탭 전환 로직

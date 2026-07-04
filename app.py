@@ -741,6 +741,69 @@ def refresh_status():
         job = REFRESH_JOBS.get(user_id, {})
         return jsonify(job)
 
+@app.route('/api/auto_refresh_status', methods=['GET'])
+def auto_refresh_status():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"enabled": False})
+    history = load_history()
+    enabled = bool(history.get(user_id, {}).get("$settings", {}).get("auto_refresh"))
+    return jsonify({"enabled": enabled})
+
+@app.route('/api/auto_refresh_toggle', methods=['POST'])
+def auto_refresh_toggle():
+    data = request.json or {}
+    user_id = data.get('user_id')
+    enabled = bool(data.get('enabled'))
+    if not user_id:
+        return jsonify({"status": "error", "message": "사용자 ID가 필요합니다."})
+
+    history = load_history()
+    history.setdefault(user_id, {}).setdefault("$settings", {})["auto_refresh"] = enabled
+    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
+    return jsonify({"status": "success", "enabled": enabled})
+
+@app.route('/api/run_scheduled_refresh', methods=['POST'])
+def run_scheduled_refresh():
+    """매일 밤 10시 cron이 호출. $settings.auto_refresh가 켜진 사용자만 전체 갱신을 시작한다."""
+    history = load_history()
+    started = []
+
+    for user_id, user_data in history.items():
+        if not isinstance(user_data, dict):
+            continue
+        if not user_data.get("$settings", {}).get("auto_refresh"):
+            continue
+
+        with REFRESH_LOCK:
+            if user_id in REFRESH_JOBS and REFRESH_JOBS[user_id]["status"] == "running":
+                continue
+
+            keywords_to_update = []
+            for key in user_data:
+                if key in ("$meta", "$settings"): continue
+                parts = key.rsplit("_", 1)
+                if len(parts) == 2:
+                    keywords_to_update.append((parts[0], parts[1]))
+
+            REFRESH_JOBS[user_id] = {
+                "status": "running",
+                "total": len(keywords_to_update),
+                "done": 0,
+                "success_count": 0,
+                "current_keyword": "",
+                "message": ""
+            }
+
+        thread = threading.Thread(target=run_refresh_job, args=(user_id, keywords_to_update))
+        thread.daemon = True
+        thread.start()
+        started.append(user_id)
+
+    return jsonify({"status": "success", "started_users": started})
+
 if __name__ == '__main__':
     # 외부 접속을 차단하고 맥북(로컬) 내부에서만 구동하도록 127.0.0.1(localhost)로 고정합니다.
     app.run(debug=True, host='127.0.0.1', port=8080)
