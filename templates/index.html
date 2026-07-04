@@ -521,6 +521,80 @@
             .rank-input-row { grid-template-columns: 1fr; }
             .chart-grid { grid-template-columns: 1fr; }
         }
+
+        /* 반응형: 모바일 (햄버거 메뉴 + 슬라이드 사이드바) */
+        .hamburger-btn {
+            display: none;
+            width: 38px;
+            height: 38px;
+            flex-shrink: 0;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: var(--radius-sm);
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            color: var(--ink);
+        }
+        #sidebarOverlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.45);
+            z-index: 150;
+        }
+        .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+        @media (max-width: 860px) {
+            body { display: block; overflow: auto; height: auto; min-height: 100vh; }
+            .hamburger-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+            .sidebar {
+                position: fixed;
+                top: 0; left: 0; bottom: 0;
+                transform: translateX(-100%);
+                transition: transform 0.22s ease;
+                box-shadow: 0 0 40px rgba(0,0,0,0.25);
+            }
+            .sidebar.open { transform: translateX(0); }
+            #sidebarOverlay.open { display: block; }
+
+            .main-content { width: 100%; height: auto; overflow: visible; }
+
+            .top-header { padding: 16px 18px; }
+            .top-header h2 { font-size: 17px; }
+            .content-area { padding: 18px 14px 28px 14px; }
+
+            .widget-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+            .widget { padding: 16px 16px; }
+            .widget-value { font-size: 24px; }
+
+            .panel { padding: 18px; }
+
+            .rank-control-panel { padding: 16px; }
+
+            .analysis-actions { flex-direction: column; align-items: stretch; gap: 12px; }
+            .analysis-button-row { flex-wrap: wrap; }
+            .analysis-button-row .btn { flex: 1 1 auto; min-width: 0; }
+
+            .place-list-item { flex-direction: column; align-items: stretch; gap: 12px; }
+            .place-list-item > div { max-width: 100% !important; }
+            .place-list-item > div:last-child { justify-content: flex-start !important; }
+
+            .chart-card, .table-card { padding: 16px; }
+            .analysis-table th, .analysis-table td { padding: 10px 8px; font-size: 12.5px; }
+            .analysis-table { min-width: 480px; }
+
+            .place-heading { flex-wrap: wrap; gap: 8px; }
+
+            .modal-content { padding: 20px; width: 94%; max-height: 90vh; }
+        }
+
+        @media (max-width: 480px) {
+            .login-box { padding: 32px 22px; max-width: 92vw; }
+            .widget-grid { grid-template-columns: 1fr 1fr; }
+            .rank-add-btn { font-size: 20px; }
+        }
     </style>
 </head>
 <body>
@@ -537,7 +611,9 @@
 
     <div id="appLayout" style="display: none; width: 100%;">
 
-        <nav class="sidebar">
+        <div id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+        <nav class="sidebar" id="sidebarNav">
             <div class="sidebar-header">
                 <span class="brand-dot">📍</span>
                 <span>순위 매니저</span>
@@ -555,7 +631,10 @@
 
         <main class="main-content">
             <header class="top-header">
-                <h2 id="pageTitleText">홈</h2>
+                <div style="display:flex; align-items:center; gap:14px; min-width:0;">
+                    <button id="hamburgerBtn" class="hamburger-btn" onclick="toggleSidebar()" aria-label="메뉴 열기">☰</button>
+                    <h2 id="pageTitleText">홈</h2>
+                </div>
                 <div style="font-size: 13.5px; color: var(--muted);">
                     <span id="welcomeMsg"></span>
                 </div>
@@ -740,6 +819,17 @@
             };
             document.getElementById('pageTitleText').innerText = titles[tabName];
             if (tabName === 'charts') renderAnalysisCards();
+            closeSidebar();
+        }
+
+        // 2-1. 모바일 사이드바 열기/닫기
+        function toggleSidebar() {
+            document.getElementById('sidebarNav').classList.toggle('open');
+            document.getElementById('sidebarOverlay').classList.toggle('open');
+        }
+        function closeSidebar() {
+            document.getElementById('sidebarNav').classList.remove('open');
+            document.getElementById('sidebarOverlay').classList.remove('open');
         }
 
         // 3. 데이터 가져오기 및 렌더링 (리스트 및 차트 셀렉트)
@@ -891,31 +981,33 @@
                     <button class="btn btn-sm place-refresh-btn" onclick="refreshPlace('${encodeURIComponent(place.target_place_url)}')">최신화</button>
                     <button class="btn btn-sm" style="color:#dc2626;" onclick="deleteKeyword('${encodeURIComponent(place.target_place_url)}', '${encodeURIComponent(keyword)}')">키워드 삭제</button>
                 </div>
-                <table class="analysis-table">
-                    <thead>
-                        <tr>
-                            <th>일자</th>
-                            <th>순위</th>
-                            <th>전체</th>
-                            <th>블로그리뷰</th>
-                            <th>방문자리뷰</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows.map((row, i) => {
-                            const prev = rows[i + 1] || row;
-                            return `
-                                <tr>
-                                    <td>${formatShortDate(row.date)}</td>
-                                    <td class="${rankTrendClass(row.pure_rank, prev.pure_rank)}">${formatRank(row.pure_rank)}</td>
-                                    <td class="${rankTrendClass(row.total_rank, prev.total_rank)}">${formatRank(row.total_rank)}</td>
-                                    <td class="${reviewTrendClass(row.blog_reviews, prev.blog_reviews)}">${formatReview(row.blog_reviews)}</td>
-                                    <td class="${reviewTrendClass(row.visitor_reviews, prev.visitor_reviews)}">${formatReview(row.visitor_reviews)}</td>
-                                </tr>
-                            `;
-                        }).join('')}
-                    </tbody>
-                </table>
+                <div class="table-scroll">
+                    <table class="analysis-table">
+                        <thead>
+                            <tr>
+                                <th>일자</th>
+                                <th>순위</th>
+                                <th>전체</th>
+                                <th>블로그리뷰</th>
+                                <th>방문자리뷰</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map((row, i) => {
+                                const prev = rows[i + 1] || row;
+                                return `
+                                    <tr>
+                                        <td>${formatShortDate(row.date)}</td>
+                                        <td class="${rankTrendClass(row.pure_rank, prev.pure_rank)}">${formatRank(row.pure_rank)}</td>
+                                        <td class="${rankTrendClass(row.total_rank, prev.total_rank)}">${formatRank(row.total_rank)}</td>
+                                        <td class="${reviewTrendClass(row.blog_reviews, prev.blog_reviews)}">${formatReview(row.blog_reviews)}</td>
+                                        <td class="${reviewTrendClass(row.visitor_reviews, prev.visitor_reviews)}">${formatReview(row.visitor_reviews)}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
             `;
             return card;
         }
@@ -1136,7 +1228,7 @@
                 
                 html += `<div class="date-block">`;
                 html += `<div class="date-block-title">${day.date} <span style="font-size:13px; color:#64748b; font-weight:normal; margin-left:10px;">(방문자리뷰: ${vReviews} / 블로그리뷰: ${bReviews})</span></div>`;
-                html += `<table>
+                html += `<div class="table-scroll"><table style="min-width:420px;">
                             <thead>
                                 <tr>
                                     <th>키워드</th>
@@ -1146,12 +1238,12 @@
                                 </tr>
                             </thead>
                             <tbody>`;
-                                
+
                 day.keywords.forEach(kw => {
                     const total = formatRank(kw.total_rank);
                     const pure = formatRank(kw.pure_rank);
                     const time = kw.time || '-';
-                    
+
                     html += `<tr>
                                 <td style="color: #334155; font-weight: 500;">${kw.keyword}</td>
                                 <td class="rank-highlight">${total}</td>
@@ -1159,7 +1251,7 @@
                                 <td style="color: #64748b;">${time}</td>
                               </tr>`;
                 });
-                html += `</tbody></table></div>`;
+                html += `</tbody></table></div></div>`;
             });
             
             modalBody.innerHTML = html;
