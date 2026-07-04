@@ -479,6 +479,198 @@ def api_history():
     history = load_history()
     return jsonify(history.get(user_id, {}))
 
+def build_places_response(user_id):
+    history = load_history()
+    user_data = history.get(user_id, {})
+    meta = user_data.get("$meta", {})
+
+    places = {}
+    for key, date_entries in user_data.items():
+        if key == "$meta" or not isinstance(date_entries, dict):
+            continue
+        parts = key.rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        keyword, url = parts
+        place_meta = meta.get(url, {})
+        place = places.setdefault(url, {
+            "target_place_url": url,
+            "place_name": place_meta.get("place_name"),
+            "place_alias": place_meta.get("place_alias"),
+            "dates": {}
+        })
+        for date, info in date_entries.items():
+            if not isinstance(info, dict):
+                continue
+            day = place["dates"].setdefault(date, {
+                "visitor_reviews": info.get("visitor_reviews"),
+                "blog_reviews": info.get("blog_reviews"),
+                "keywords": []
+            })
+            if day["visitor_reviews"] is None:
+                day["visitor_reviews"] = info.get("visitor_reviews")
+            if day["blog_reviews"] is None:
+                day["blog_reviews"] = info.get("blog_reviews")
+            day["keywords"].append({
+                "keyword": keyword,
+                "pure_rank": info.get("pure_rank"),
+                "total_rank": info.get("total_rank"),
+                "time": info.get("time")
+            })
+
+    result = []
+    for url, place in places.items():
+        dates_sorted = sorted(place["dates"].keys(), reverse=True)
+        result.append({
+            "target_place_url": url,
+            "place_name": place["place_name"],
+            "place_alias": place["place_alias"],
+            "history": [
+                {
+                    "date": date,
+                    "visitor_reviews": place["dates"][date]["visitor_reviews"],
+                    "blog_reviews": place["dates"][date]["blog_reviews"],
+                    "keywords": place["dates"][date]["keywords"]
+                }
+                for date in dates_sorted
+            ]
+        })
+    return result
+
+@app.route('/history', methods=['POST'])
+def history_route():
+    data = request.json or {}
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({"status": "error", "message": "사용자 ID가 필요합니다."})
+    return jsonify({"status": "success", "places": build_places_response(user_id)})
+
+@app.route('/api/update_alias', methods=['POST'])
+def update_alias():
+    data = request.json or {}
+    user_id = data.get('user_id')
+    target_place_url = data.get('target_place_url')
+    place_alias = data.get('place_alias', '')
+
+    if not user_id or not target_place_url:
+        return jsonify({"status": "error", "message": "필수 값이 없습니다."})
+
+    history = load_history()
+    history.setdefault(user_id, {}).setdefault("$meta", {}).setdefault(target_place_url, {})["place_alias"] = place_alias
+    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
+    return jsonify({"status": "success"})
+
+@app.route('/api/delete_keyword', methods=['POST'])
+def delete_keyword():
+    data = request.json or {}
+    user_id = data.get('user_id')
+    target_place_url = data.get('target_place_url')
+    keyword = data.get('keyword')
+
+    if not user_id or not target_place_url or not keyword:
+        return jsonify({"status": "error", "message": "필수 값이 없습니다."})
+
+    history = load_history()
+    key = f"{keyword}_{target_place_url}"
+    if user_id in history and key in history[user_id]:
+        del history[user_id][key]
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=4)
+
+    return jsonify({"status": "success"})
+
+@app.route('/search', methods=['POST'])
+def search_route():
+    data = request.json or {}
+    user_id = data.get('user_id')
+    keyword = data.get('keyword')
+    target_place_url = data.get('target_place_url')
+    place_alias = data.get('place_alias')
+
+    if not user_id or not keyword or not target_place_url:
+        return jsonify({"status": "error", "message": "필수 값이 없습니다."})
+
+    history = load_history()
+    meta = history.get(user_id, {}).get("$meta", {}).get(target_place_url, {})
+    res = get_ranking(keyword, target_place_url, target_meta=meta, fast_limit=20)
+
+    if res.get('status') != 'success':
+        return jsonify({"status": "error", "message": res.get('message', '검색에 실패하였습니다.')})
+
+    save_to_history(
+        user_id, keyword, target_place_url,
+        res.get('total_rank'), res.get('pure_rank'),
+        res.get('visitor_reviews'), res.get('blog_reviews'),
+        res.get('name'), place_alias, res.get('place_id'),
+        preserve_missing_reviews=True
+    )
+
+    if not res.get('total_rank'):
+        return jsonify({"status": "out_of_top", "name": res.get('name'), "keyword": keyword})
+
+    return jsonify({
+        "status": "success",
+        "total_rank": res.get('total_rank'),
+        "pure_rank": res.get('pure_rank'),
+        "visitor_reviews": res.get('visitor_reviews'),
+        "blog_reviews": res.get('blog_reviews'),
+        "name": res.get('name'),
+        "keyword": keyword
+    })
+
+@app.route('/search_more', methods=['POST'])
+def search_more_route():
+    data = request.json or {}
+    user_id = data.get('user_id')
+    keyword = data.get('keyword')
+    target_place_url = data.get('target_place_url')
+    place_alias = data.get('place_alias')
+    start_rank = int(data.get('start_rank', 21))
+    end_rank = int(data.get('end_rank', min(start_rank + 19, 99)))
+
+    if not user_id or not keyword or not target_place_url:
+        return jsonify({"status": "error", "message": "필수 값이 없습니다."})
+
+    history = load_history()
+    meta = history.get(user_id, {}).get("$meta", {}).get(target_place_url, {})
+    res = get_ranking(keyword, target_place_url, target_meta=meta, fast_only=False, fast_limit=end_rank)
+
+    if res.get('status') != 'success':
+        return jsonify({"status": "error", "message": res.get('message', '검색에 실패하였습니다.')})
+
+    total_rank = res.get('total_rank') or 0
+    if total_rank and start_rank <= total_rank <= end_rank:
+        save_to_history(
+            user_id, keyword, target_place_url,
+            res.get('total_rank'), res.get('pure_rank'),
+            res.get('visitor_reviews'), res.get('blog_reviews'),
+            res.get('name'), place_alias, res.get('place_id'),
+            preserve_missing_reviews=True
+        )
+        return jsonify({
+            "status": "success",
+            "total_rank": res.get('total_rank'),
+            "pure_rank": res.get('pure_rank'),
+            "visitor_reviews": res.get('visitor_reviews'),
+            "blog_reviews": res.get('blog_reviews'),
+            "name": res.get('name')
+        })
+
+    if end_rank >= 99:
+        return jsonify({"status": "not_found"})
+
+    next_start = end_rank + 1
+    next_end = min(next_start + 19, 99)
+    return jsonify({
+        "status": "need_more",
+        "checked_start": start_rank,
+        "checked_end": end_rank,
+        "next_start": next_start,
+        "next_end": next_end
+    })
+
 @app.route('/api/refresh_place', methods=['POST'])
 def refresh_place():
     data = request.json
@@ -524,9 +716,14 @@ def refresh_place():
     
     return jsonify({"status": "running", "total": len(keywords_to_update)})
 
-@app.route('/api/refresh_status', methods=['GET'])
+app.add_url_rule('/api/refresh_all', view_func=refresh_place, methods=['POST'])
+
+@app.route('/api/refresh_status', methods=['GET', 'POST'])
 def refresh_status():
-    user_id = request.args.get('user_id')
+    if request.method == 'POST':
+        user_id = (request.json or {}).get('user_id')
+    else:
+        user_id = request.args.get('user_id')
     with REFRESH_LOCK:
         job = REFRESH_JOBS.get(user_id, {})
         return jsonify(job)
