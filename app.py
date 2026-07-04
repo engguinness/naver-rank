@@ -76,11 +76,23 @@ def get_search_widget_data(keyword, timeout=5):
         return {"organic": [], "ad_count": 0}
 
 def get_place_review_counts_http(place_id, timeout=5):
-    """m.place.naver.com 상세 페이지에서 리뷰 수를 순위와 무관하게 즉시 가져온다."""
+    """m.place.naver.com 상세 페이지에서 리뷰 수를 순위와 무관하게 즉시 가져온다.
+
+    og:description 메타 태그("방문자리뷰 N · 블로그리뷰 N")가 GraphQL 캐시의
+    visitorReviewsTotal/cafeBlogReviewsTotal 필드보다 최신값을 반영하므로 이걸 우선 사용한다.
+    """
     url = f"https://m.place.naver.com/place/{place_id}/home"
     try:
         resp = requests.get(url, headers=SEARCH_HEADERS, timeout=timeout)
         resp.encoding = "utf-8"
+
+        meta_match = re.search(r'방문자\s*리뷰\s*([0-9,]+)\s*·\s*블로그\s*리뷰\s*([0-9,]+)', resp.text)
+        if meta_match:
+            return {
+                "visitor_reviews": parse_count(meta_match.group(1)),
+                "blog_reviews": parse_count(meta_match.group(2)),
+            }
+
         visitor_match = re.search(r'"visitorReviewsTotal":(\d+)', resp.text)
         blog_match = re.search(r'"cafeBlogReviewsTotal":(\d+)', resp.text)
         return {
