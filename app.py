@@ -38,15 +38,22 @@ SEARCH_HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9",
 }
 
-def extract_apollo_state(html, marker):
-    idx = html.find(marker)
-    if idx < 0:
-        return None
-    try:
-        obj, _ = json.JSONDecoder().raw_decode(html[idx + len(marker):])
-        return obj
-    except Exception:
-        return None
+APOLLO_STATE_MARKER_RE = re.compile(r"naver\.search\.ext\.[a-zA-Z0-9]+\.salt\.__APOLLO_STATE__\s*=\s*")
+
+def extract_apollo_states(html):
+    """페이지에 심어진 모든 __APOLLO_STATE__ 캐시를 찾아 파싱한다.
+
+    지역/장소성이 강한 검색어("천안영어회화" 등)는 위젯이 nmb 대신 loc(때로는 nop) salt로 내려오는데,
+    이 변형을 놓치면 순위 위젯이 비어있는 것으로 오판해 매번 느린 Selenium 폴백으로 빠진다.
+    """
+    states = []
+    for m in APOLLO_STATE_MARKER_RE.finditer(html):
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(html[m.end():])
+            states.append(obj)
+        except Exception:
+            continue
+    return states
 
 def get_search_widget_data(keyword, timeout=5):
     """통합검색 플레이스 위젯에서 오가닉 순위(상위 7~9위)와 노출 광고 개수를 가져온다."""
@@ -54,23 +61,24 @@ def get_search_widget_data(keyword, timeout=5):
     try:
         resp = requests.get(url, headers=SEARCH_HEADERS, timeout=timeout)
         resp.encoding = "utf-8"
-        obj = extract_apollo_state(resp.text, "naver.search.ext.nmb.salt.__APOLLO_STATE__ = ")
-        if not obj:
-            return {"organic": [], "ad_count": 0}
 
-        root = obj.get("ROOT_QUERY", {})
-        place_key = next((k for k in root if k.startswith("placeList(")), None)
-        ad_key = next((k for k in root if k.startswith("adBusinesses(")), None)
+        for obj in extract_apollo_states(resp.text):
+            root = obj.get("ROOT_QUERY", {})
+            place_key = next((k for k in root if k.startswith("placeList(")), None)
+            if not place_key:
+                continue
 
-        organic = []
-        if place_key:
+            ad_key = next((k for k in root if k.startswith("adBusinesses(")), None)
+            organic = []
             for ref in root[place_key].get("businesses", {}).get("items", []):
                 data = obj.get(ref.get("__ref"))
                 if data:
                     organic.append(data)
 
-        ad_count = len(root[ad_key].get("items", [])) if ad_key else 0
-        return {"organic": organic, "ad_count": ad_count}
+            ad_count = len(root[ad_key].get("items", [])) if ad_key else 0
+            return {"organic": organic, "ad_count": ad_count}
+
+        return {"organic": [], "ad_count": 0}
     except Exception as e:
         print(f"검색 위젯 조회 실패: {e}", flush=True)
         return {"organic": [], "ad_count": 0}
