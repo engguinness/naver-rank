@@ -665,6 +665,7 @@
                                 <span class="slider"></span>
                             </label>
                         </div>
+                        <div id="autoRefreshLastRun" style="margin-top: 12px; font-size: 12.5px; color: var(--muted);"></div>
                     </div>
 
                     <div class="panel">
@@ -779,6 +780,17 @@
                 const response = await fetch(`/api/auto_refresh_status?user_id=${encodeURIComponent(currentUserId)}`);
                 const data = await response.json();
                 document.getElementById('autoRefreshToggle').checked = !!data.enabled;
+
+                const lastRunEl = document.getElementById('autoRefreshLastRun');
+                if (data.last_run) {
+                    const r = data.last_run;
+                    const resultText = r.status === 'success'
+                        ? `${r.total}개 중 ${r.success_count}개 성공`
+                        : '오류 발생';
+                    lastRunEl.innerText = `마지막 자동 갱신: ${r.finished_at} (${resultText})`;
+                } else {
+                    lastRunEl.innerText = '아직 자동 갱신이 실행된 적이 없습니다.';
+                }
             } catch (e) {
                 console.error('자동 갱신 상태 조회 실패:', e);
             }

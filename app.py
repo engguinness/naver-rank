@@ -518,7 +518,18 @@ def process_keyword_chunk(user_id, chunk, history):
         try: driver.quit()
         except: pass
 
-def run_refresh_job(user_id, keywords_to_update):
+def save_last_auto_refresh(user_id, status, total, success_count, finished_at):
+    history = load_history()
+    history.setdefault(user_id, {}).setdefault("$settings", {})["last_auto_refresh"] = {
+        "status": status,
+        "total": total,
+        "success_count": success_count,
+        "finished_at": finished_at
+    }
+    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=4)
+
+def run_refresh_job(user_id, keywords_to_update, is_scheduled=False):
     try:
         history = load_history()
         worker_count = max(1, min(REFRESH_CONCURRENCY, len(keywords_to_update)))
@@ -536,12 +547,21 @@ def run_refresh_job(user_id, keywords_to_update):
             job["current_keyword"] = ""
             job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             job["message"] = f"총 {job['total']}개 중 {job['success_count']}개 갱신 완료!"
+            total, success_count, finished_at = job["total"], job["success_count"], job["finished_at"]
+        if is_scheduled:
+            save_last_auto_refresh(user_id, "success", total, success_count, finished_at)
     except Exception as e:
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with REFRESH_LOCK:
             if user_id in REFRESH_JOBS:
                 REFRESH_JOBS[user_id]["status"] = "error"
                 REFRESH_JOBS[user_id]["message"] = f"업데이트 중 오류가 발생했습니다: {e}"
-                REFRESH_JOBS[user_id]["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                REFRESH_JOBS[user_id]["finished_at"] = finished_at
+                total, success_count = REFRESH_JOBS[user_id]["total"], REFRESH_JOBS[user_id]["success_count"]
+            else:
+                total, success_count = 0, 0
+        if is_scheduled:
+            save_last_auto_refresh(user_id, "error", total, success_count, finished_at)
 
 # ==========================================
 # 6. Flask 라우트 (API 엔드포인트)
@@ -812,10 +832,13 @@ def refresh_status():
 def auto_refresh_status():
     user_id = request.args.get('user_id')
     if not user_id:
-        return jsonify({"enabled": False})
+        return jsonify({"enabled": False, "last_run": None})
     history = load_history()
-    enabled = bool(history.get(user_id, {}).get("$settings", {}).get("auto_refresh"))
-    return jsonify({"enabled": enabled})
+    settings = history.get(user_id, {}).get("$settings", {})
+    return jsonify({
+        "enabled": bool(settings.get("auto_refresh")),
+        "last_run": settings.get("last_auto_refresh")
+    })
 
 @app.route('/api/auto_refresh_toggle', methods=['POST'])
 def auto_refresh_toggle():
@@ -864,7 +887,7 @@ def run_scheduled_refresh():
                 "message": ""
             }
 
-        thread = threading.Thread(target=run_refresh_job, args=(user_id, keywords_to_update))
+        thread = threading.Thread(target=run_refresh_job, args=(user_id, keywords_to_update, True))
         thread.daemon = True
         thread.start()
         started.append(user_id)
