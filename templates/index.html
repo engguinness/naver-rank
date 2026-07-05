@@ -582,8 +582,7 @@
             .place-list-item > div:last-child { justify-content: flex-start !important; }
 
             .chart-card, .table-card { padding: 16px; }
-            .analysis-table th, .analysis-table td { padding: 10px 8px; font-size: 12.5px; }
-            .analysis-table { min-width: 480px; }
+            .analysis-table th, .analysis-table td { padding: 8px 4px; font-size: 12px; word-break: keep-all; }
 
             .place-heading { flex-wrap: wrap; gap: 8px; }
 
@@ -999,7 +998,6 @@
                             <tr>
                                 <th>일자</th>
                                 <th>순위</th>
-                                <th>전체</th>
                                 <th>블로그리뷰</th>
                                 <th>방문자리뷰</th>
                             </tr>
@@ -1011,7 +1009,6 @@
                                     <tr>
                                         <td>${formatShortDate(row.date)}</td>
                                         <td class="${rankTrendClass(row.pure_rank, prev.pure_rank)}">${formatRank(row.pure_rank)}</td>
-                                        <td class="${rankTrendClass(row.total_rank, prev.total_rank)}">${formatRank(row.total_rank)}</td>
                                         <td class="${reviewTrendClass(row.blog_reviews, prev.blog_reviews)}">${formatReview(row.blog_reviews)}</td>
                                         <td class="${reviewTrendClass(row.visitor_reviews, prev.visitor_reviews)}">${formatReview(row.visitor_reviews)}</td>
                                     </tr>
