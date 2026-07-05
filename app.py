@@ -27,6 +27,19 @@ SHARED_DRIVER = None
 REFRESH_JOBS = {}
 REFRESH_LOCK = threading.Lock()
 
+# HTTP 커넥션 재사용: 매 요청마다 TCP/TLS 핸드셰이크를 새로 맺지 않도록 세션을 공유한다.
+# 전체 갱신은 REFRESH_CONCURRENCY개의 스레드가 동시에 호출하므로 풀 크기를 넉넉히 잡는다.
+HTTP_SESSION = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+HTTP_SESSION.mount("https://", _adapter)
+HTTP_SESSION.mount("http://", _adapter)
+
+# 위젯 캐시: 전체 갱신 중 동일 키워드를 여러 플레이스가 공유하는 경우(예: 같은 지역 두 지점이
+# 같은 키워드로 등록된 경우) 검색 위젯을 중복 조회하지 않도록 짧은 TTL로 재사용한다.
+WIDGET_CACHE = {}
+WIDGET_CACHE_LOCK = threading.Lock()
+WIDGET_CACHE_TTL = 60
+
 # ==========================================
 # 1. 순위/광고/리뷰 고속 조회 (순수 HTTP, 브라우저 불필요)
 # ==========================================
@@ -57,9 +70,16 @@ def extract_apollo_states(html):
 
 def get_search_widget_data(keyword, timeout=5):
     """통합검색 플레이스 위젯에서 오가닉 순위(상위 7~9위)와 노출 광고 개수를 가져온다."""
+    now = time.time()
+    with WIDGET_CACHE_LOCK:
+        cached = WIDGET_CACHE.get(keyword)
+        if cached and now - cached[0] < WIDGET_CACHE_TTL:
+            return cached[1]
+
     url = f"https://search.naver.com/search.naver?query={quote(keyword)}"
+    result = {"organic": [], "ad_count": 0}
     try:
-        resp = requests.get(url, headers=SEARCH_HEADERS, timeout=timeout)
+        resp = HTTP_SESSION.get(url, headers=SEARCH_HEADERS, timeout=timeout)
         resp.encoding = "utf-8"
 
         for obj in extract_apollo_states(resp.text):
@@ -76,12 +96,14 @@ def get_search_widget_data(keyword, timeout=5):
                     organic.append(data)
 
             ad_count = len(root[ad_key].get("items", [])) if ad_key else 0
-            return {"organic": organic, "ad_count": ad_count}
-
-        return {"organic": [], "ad_count": 0}
+            result = {"organic": organic, "ad_count": ad_count}
+            break
     except Exception as e:
         print(f"검색 위젯 조회 실패: {e}", flush=True)
-        return {"organic": [], "ad_count": 0}
+
+    with WIDGET_CACHE_LOCK:
+        WIDGET_CACHE[keyword] = (now, result)
+    return result
 
 def get_place_review_counts_http(place_id, timeout=5):
     """m.place.naver.com 상세 페이지에서 리뷰 수를 순위와 무관하게 즉시 가져온다.
@@ -91,7 +113,7 @@ def get_place_review_counts_http(place_id, timeout=5):
     """
     url = f"https://m.place.naver.com/place/{place_id}/home"
     try:
-        resp = requests.get(url, headers=SEARCH_HEADERS, timeout=timeout)
+        resp = HTTP_SESSION.get(url, headers=SEARCH_HEADERS, timeout=timeout)
         resp.encoding = "utf-8"
 
         meta_match = re.search(r'방문자\s*리뷰\s*([0-9,]+)\s*·\s*블로그\s*리뷰\s*([0-9,]+)', resp.text)
