@@ -471,8 +471,31 @@ def process_keyword(user_id, kw, url, meta, driver):
             REFRESH_JOBS[user_id]["done"] += 1
             REFRESH_JOBS[user_id]["current_keyword"] = kw
 
+class LazyDriver:
+    """청크당 브라우저를 미리 띄우지 않고, 위젯 HTTP 조회가 실제로 실패해
+    Selenium 폴백이 필요해지는 시점에만 Chrome을 실행한다.
+
+    전체 갱신에서 대부분의 키워드가 이제 위젯 HTTP 경로로 해결되므로(마커 파싱 수정 이후),
+    청크마다 무조건 Chrome을 띄우던 이전 방식은 불필요한 수 초의 지연과 수백MB의 메모리를 낭비했다.
+    """
+    def __init__(self, factory):
+        self._factory = factory
+        self._driver = None
+
+    def _ensure(self):
+        if self._driver is None:
+            self._driver = self._factory()
+        return self._driver
+
+    def __getattr__(self, name):
+        return getattr(self._ensure(), name)
+
+    def quit(self):
+        if self._driver is not None:
+            self._driver.quit()
+
 def process_keyword_chunk(user_id, chunk, history):
-    driver = create_driver(enable_performance_logs=True)
+    driver = LazyDriver(lambda: create_driver(enable_performance_logs=True))
     try:
         for kw, url in chunk:
             meta = history.get(user_id, {}).get("$meta", {}).get(url, {})
