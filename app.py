@@ -34,6 +34,10 @@ _adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
 HTTP_SESSION.mount("https://", _adapter)
 HTTP_SESSION.mount("http://", _adapter)
 
+# 리뷰 수 조회(m.place)는 순위 위젯 조회(search.naver)와 서로 무관한 별개의 요청이므로
+# 순차 대기 대신 동시에 시작해 왕복 시간을 절반 가까이 줄인다.
+REVIEW_PREFETCH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="review-prefetch")
+
 # 위젯 캐시: 전체 갱신 중 동일 키워드를 여러 플레이스가 공유하는 경우(예: 같은 지역 두 지점이
 # 같은 키워드로 등록된 경우) 검색 위젯을 중복 조회하지 않도록 짧은 TTL로 재사용한다.
 WIDGET_CACHE = {}
@@ -380,6 +384,13 @@ def get_ranking(keyword, target_place_url, target_meta=None, fast_only=True, inc
     # 1. 대상 플레이스 ID 먼저 확보
     target_place_id = (target_meta or {}).get("place_id") or extract_place_id(target_place_url)
 
+    # 리뷰 수 조회는 순위 위젯 조회 결과와 무관하게 place_id만 있으면 바로 시작할 수 있으므로
+    # 위젯 조회를 기다리지 않고 백그라운드로 동시에 실행한다. 위젯에서 미스가 나면 결과는 버린다.
+    review_future = (
+        REVIEW_PREFETCH_POOL.submit(get_place_review_counts_http, target_place_id)
+        if target_place_id and include_review_detail else None
+    )
+
     # 2. [초고속] 통합검색 위젯에서 순수 HTTP로 순위/광고 확인 (브라우저 불필요)
     widget_data = get_search_widget_data(keyword)
     ad_count = widget_data["ad_count"]
@@ -387,7 +398,7 @@ def get_ranking(keyword, target_place_url, target_meta=None, fast_only=True, inc
     if target_place_id:
         for idx, item in enumerate(widget_data["organic"], start=1):
             if str(item.get("id")) == str(target_place_id):
-                review_counts = get_place_review_counts_http(target_place_id) if include_review_detail else {}
+                review_counts = review_future.result() if review_future else {}
                 return {
                     "status": "success",
                     "total_rank": idx + ad_count,
@@ -427,7 +438,10 @@ def get_ranking(keyword, target_place_url, target_meta=None, fast_only=True, inc
                         "category": " > ".join(result.get("category", [])) if result.get("category") else None
                     }
                     if include_review_detail:
-                        review_counts = get_place_review_counts_http(target_place["place_id"])
+                        if review_future and target_place["place_id"] == target_place_id:
+                            review_counts = review_future.result()
+                        else:
+                            review_counts = get_place_review_counts_http(target_place["place_id"])
                         response["visitor_reviews"] = review_counts.get("visitor_reviews")
                         response["blog_reviews"] = review_counts.get("blog_reviews")
                     return response
